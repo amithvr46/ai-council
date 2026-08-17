@@ -100,6 +100,7 @@ class OpenAIProvider(ModelProvider):
                 result.output_tokens += resp2.usage.completion_tokens if resp2.usage else 0
                 result.latency_ms += int((time.monotonic() - started) * 1000)
                 result.retried = True
+                result.api_attempts = 2
                 if parsed is None:
                     raise MalformedOutput(
                         f"{model} returned malformed output twice for {schema.__name__}"

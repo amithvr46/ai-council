@@ -68,6 +68,7 @@ class AnthropicProvider(ModelProvider):
                 result.latency_ms += retry.latency_ms
                 result.content = retry.content or result.content
                 result.retried = True
+                result.api_attempts = 2
                 if parsed is None:
                     raise MalformedOutput(
                         f"{model} returned malformed output twice for {schema.__name__}"

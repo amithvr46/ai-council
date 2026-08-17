@@ -1,15 +1,22 @@
 """Per-mode model-call budgets, enforced in code — not prompts.
 
-A "call" is one logical generation (the provider-internal malformed-output
-retry belongs to the same logical call). The budget exists so no code path,
-present or future, can loop: if a stage would exceed the mode budget the
-engine raises instead of calling.
+Accounting is two-level, and both levels are recorded:
+
+- LOGICAL GENERATIONS (what these budgets bound): one orchestration-level
+  generate() per stage. Stored per request as `model_calls`.
+- PHYSICAL API ATTEMPTS: actual provider invocations. A logical generation
+  makes at most 2 (the single malformed-output retry), so physical attempts
+  are hard-bounded at 2x the mode budget. Stored per step as `api_attempts`
+  and per request as `total_api_attempts` — retries are never hidden.
+
+The budget exists so no code path, present or future, can loop: if a stage
+would exceed the mode budget the engine raises instead of calling.
 """
 
 MODE_BUDGETS: dict[str, int] = {
-    "quick": 1,
-    "council": 5,  # 2 candidates + combined check + synthesis + headroom for M2 judge
-    "deep": 9,  # adds critique round, verifier and one revision in later milestones
+    "quick": 2,  # 1 primary + 1 visible failover to the other provider
+    "council": 5,  # 2 candidates + combined check + (synthesis | judge) + headroom
+    "deep": 9,  # + critique round, verifier and one revision (max observed path: 8)
 }
 
 

@@ -41,6 +41,7 @@ class ModelResponse:
     latency_ms: int = 0
     parsed: Any = None  # populated when a schema was requested
     retried: bool = False  # True when the malformed-output retry was used
+    api_attempts: int = 1  # physical provider invocations behind this generation
     raw: dict = field(default_factory=dict)
 
     @property

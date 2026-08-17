@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class CheckableClaim(BaseModel):
@@ -19,6 +19,32 @@ class CombinedCheck(BaseModel):
     key_disagreements: list[str] = Field(default_factory=list)
     checkable_claims: list[CheckableClaim] = Field(default_factory=list)
     summary: str = Field(description="One-paragraph plain-language comparison")
+
+    @model_validator(mode="after")
+    def _invariants(self) -> "CombinedCheck":
+        """The pipeline branches on these fields — contradictory combinations
+        must fail validation so the provider retry (and, failing that, the
+        degraded fallback) handles them instead of the synthesis path.
+
+        Invariants: agree => type none and no key disagreements;
+        partial/disagree => type must name what differs (not none);
+        disagree => at least one key disagreement listed.
+        Checkable claims are allowed at ANY agreement level — two models
+        agreeing on a wrong fact is exactly what deep-mode verification
+        exists to catch."""
+        if self.agreement == "agree":
+            if self.disagreement_type != "none":
+                raise ValueError("agreement='agree' requires disagreement_type='none'")
+            if self.key_disagreements:
+                raise ValueError("agreement='agree' cannot list key_disagreements")
+        else:
+            if self.disagreement_type == "none":
+                raise ValueError(
+                    f"agreement={self.agreement!r} requires a disagreement_type other than 'none'"
+                )
+            if self.agreement == "disagree" and not self.key_disagreements:
+                raise ValueError("agreement='disagree' requires at least one key_disagreement")
+        return self
 
 
 class Synthesis(BaseModel):

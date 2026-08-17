@@ -6,6 +6,7 @@ from council.engine.budget import MODE_BUDGETS, BudgetExceeded, BudgetTracker
 def test_budget_enforced():
     b = BudgetTracker("quick")
     b.spend("candidate")
+    b.spend("candidate_fallback")  # quick = 1 primary + 1 failover
     with pytest.raises(BudgetExceeded):
         b.spend("anything_else")
 
@@ -25,6 +26,7 @@ def test_unknown_mode_rejected():
 def test_budget_error_names_stage():
     b = BudgetTracker("quick")
     b.spend("candidate")
+    b.spend("candidate_fallback")
     with pytest.raises(BudgetExceeded) as e:
         b.spend("judge")
     assert "judge" in str(e.value)

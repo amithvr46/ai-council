@@ -84,18 +84,31 @@ class CouncilEngine:
     # ---------------------------------------------------------------- quick
 
     async def _run_quick(self, request_id: str, question: str, budget, seq) -> dict:
-        provider = await self._pick_quick_provider()
-        model = self.flagship_models[provider.name]
+        """One model answers; if it fails, fail over to the other provider
+        once, visibly (degraded=True). Same policy as council: a healthy
+        provider means the user gets an answer."""
+        primary = await self._pick_quick_provider()
         prompt = self.registry.get("candidate")
+        messages = [
+            {"role": "system", "content": prompt.text},
+            {"role": "user", "content": question},
+        ]
 
         budget.spend("candidate")
-        resp = await provider.generate(
-            [
-                {"role": "system", "content": prompt.text},
-                {"role": "user", "content": question},
-            ],
-            model=model,
-        )
+        try:
+            resp = await primary.generate(messages, model=self.flagship_models[primary.name])
+        except ProviderError as e:
+            await self._record_error(request_id, seq(), "candidate_a", primary.name, e)
+            fallback_name = self._other_provider(primary.name)
+            fallback = self.providers[fallback_name]
+            budget.spend("candidate_fallback")
+            resp = await fallback.generate(
+                messages, model=self.flagship_models[fallback_name]
+            )  # both providers failing fails the request — recorded by run()
+            await self._record_call(
+                request_id, seq(), "candidate_fallback", resp, prompt.version_id
+            )
+            return {"status": "complete", "final_answer": resp.content, "degraded": True}
         await self._record_call(request_id, seq(), "candidate_a", resp, prompt.version_id)
         return {"status": "complete", "final_answer": resp.content}
 
@@ -476,6 +489,7 @@ class CouncilEngine:
                     output_tokens=resp.output_tokens,
                     cost_usd=resp.cost_usd,
                     latency_ms=resp.latency_ms,
+                    api_attempts=resp.api_attempts,
                 )
             )
             req = await s.get(Request, request_id)
@@ -483,6 +497,7 @@ class CouncilEngine:
             req.total_output_tokens += resp.output_tokens
             req.total_cost_usd += resp.cost_usd
             req.model_calls += 1
+            req.total_api_attempts += resp.api_attempts
 
     async def _record_error(self, request_id, seq, stage, provider_name, error: Exception):
         async with session_scope() as s:
@@ -533,6 +548,7 @@ class CouncilEngine:
                     "output_tokens": req.total_output_tokens,
                     "cost_usd": round(req.total_cost_usd, 6),
                     "model_calls": req.model_calls,
+                    "api_attempts": req.total_api_attempts,
                     "latency_ms": req.latency_ms,
                 },
                 "user_rating": req.user_rating,
@@ -549,6 +565,7 @@ class CouncilEngine:
                         "tokens": {"input": st.input_tokens, "output": st.output_tokens},
                         "cost_usd": round(st.cost_usd, 6),
                         "latency_ms": st.latency_ms,
+                        "api_attempts": st.api_attempts,
                     }
                     for st in steps
                 ],

@@ -43,7 +43,8 @@ class Request(Base):
     total_output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    model_calls: Mapped[int] = mapped_column(Integer, default=0)
+    model_calls: Mapped[int] = mapped_column(Integer, default=0)  # logical generations
+    total_api_attempts: Mapped[int] = mapped_column(Integer, default=0)  # physical invocations
     user_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     steps: Mapped[list["Step"]] = relationship(
@@ -73,5 +74,6 @@ class Step(Base):
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    api_attempts: Mapped[int] = mapped_column(Integer, default=1)  # 2 when the retry fired
 
     request: Mapped[Request] = relationship(back_populates="steps")
