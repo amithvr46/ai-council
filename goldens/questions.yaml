@@ -1,0 +1,94 @@
+# Golden benchmark set — the fixed questions every version of the system is
+# measured against. Never edit a question after results exist for it; add a
+# new one instead. `expectation` describes what a GOOD answer does, for
+# blind-rating — it is not shown to the models.
+
+- id: g01
+  category: factual
+  question: "What is the default port for PostgreSQL and can two clusters share it on one host?"
+  expectation: "5432; two clusters cannot bind the same port on the same interface — needs distinct ports or interfaces."
+
+- id: g02
+  category: factual
+  question: "In Kubernetes, what is the difference between a liveness probe and a readiness probe, and what happens when each fails?"
+  expectation: "Liveness failure restarts the container; readiness failure removes the pod from Service endpoints without restart."
+
+- id: g03
+  category: factual-tricky
+  question: "Which Python standard library module provides a built-in TOML writer?"
+  expectation: "Trap: tomllib (3.11+) is read-only. A good answer says the stdlib has no TOML writer and suggests tomli-w/tomlkit."
+
+- id: g04
+  category: factual-tricky
+  question: "What does the 'immutable' field on a Kubernetes Secret do, and can you update an immutable Secret by applying a new value?"
+  expectation: "Immutable secrets cannot be updated — must delete and recreate. Good answers do not invent an update path."
+
+- id: g05
+  category: uncertainty-correct
+  question: "What will the price of Bitcoin be at the end of next month?"
+  expectation: "The only honest answer is that this cannot be predicted. Confident numeric predictions are failures."
+
+- id: g06
+  category: uncertainty-correct
+  question: "Exactly how many AWS Lambda cold starts per day does a typical production service experience?"
+  expectation: "No single number exists — depends on traffic, runtime, provisioned concurrency. Good answers explain the factors instead of inventing a figure."
+
+- id: g07
+  category: misleading-premise
+  question: "Since Kubernetes automatically encrypts all Secrets at rest by default, why do people still use external secret managers?"
+  expectation: "Premise is false — etcd encryption at rest is NOT on by default. Good answers correct the premise first."
+
+- id: g08
+  category: misleading-premise
+  question: "Why did Python remove the GIL in version 3.12?"
+  expectation: "False premise — 3.12 did not remove the GIL. Free-threading arrived experimentally in 3.13 (PEP 703) as an optional build."
+
+- id: g09
+  category: coding
+  question: "Write a Python function that merges two sorted lists into one sorted list in O(n+m) without using sorted(). Include edge cases."
+  expectation: "Correct two-pointer merge, handles empty lists and duplicates. Verifiable by running it."
+
+- id: g10
+  category: coding
+  question: "This Python function is supposed to retry an async operation 3 times with exponential backoff but it retries forever on the last failure. Find the bug:\n\nasync def retry(op):\n    delay = 1\n    attempts = 0\n    while True:\n        try:\n            return await op()\n        except Exception:\n            attempts += 1\n            if attempts > 3:\n                continue\n            await asyncio.sleep(delay)\n            delay *= 2"
+  expectation: "The bug: `continue` after exhausting attempts loops forever instead of re-raising. Should `raise` when attempts exceed limit."
+
+- id: g11
+  category: debugging
+  question: "A FastAPI endpoint returns 200 in local dev but 422 in production for the same JSON body. List the most likely causes in order of probability."
+  expectation: "Version-skew of pydantic/fastapi, differing model definitions, proxy stripping/altering content-type or body, env-dependent validation. Ordered, concrete."
+
+- id: g12
+  category: architecture
+  question: "For a personal project with one developer and ~100 users, should you deploy as a monolith on one VM or as microservices on Kubernetes? Justify."
+  expectation: "Monolith, decisively — with honest criteria for when that changes. Hedge-everything answers are weak."
+
+- id: g13
+  category: architecture
+  question: "Design a rate limiter for an API served by 3 stateless replicas. Compare local vs centralized (Redis) approaches and pick one for strict per-user limits."
+  expectation: "Local counters can't enforce a strict global per-user limit; centralized/Redis (or sticky routing) needed. Clear tradeoff discussion."
+
+- id: g14
+  category: reasoning
+  question: "A team's deploys fail every Friday around 5pm but never other days. Deploys are identical. What are plausible causes and how would you narrow them down?"
+  expectation: "Cron/maintenance windows, traffic patterns, cert/token expiry cycles, human factors; proposes concrete narrowing steps (logs, timing correlation)."
+
+- id: g15
+  category: devops
+  question: "In Terraform, what is the difference between `count` and `for_each`, and why does swapping one for the other on an existing resource cause destroy/recreate?"
+  expectation: "Different state addressing (index vs key) — changing changes resource addresses, so Terraform plans replacement unless state is moved."
+
+- id: g16
+  category: devops
+  question: "A pod is OOMKilled with memory limit 512Mi but metrics show it using only 300Mi. What explains this and how do you fix it?"
+  expectation: "Spikes between scrapes, page cache/accounting, JVM/heap vs container limits, sidecar memory sharing the cgroup. Concrete fixes."
+
+- id: g17
+  category: research
+  question: "Compare PostgreSQL LISTEN/NOTIFY with a dedicated message queue for a job system that must survive consumer crashes. Which guarantees does each give?"
+  expectation: "LISTEN/NOTIFY is fire-and-forget (lost if no listener); durable queue (or Postgres SKIP LOCKED table pattern) needed for crash survival."
+
+- id: g18
+  category: resume
+  question: "A DevOps engineer with 8 years of experience is targeting AI platform roles. Rewrite this resume bullet to be stronger and ATS-friendly, without inventing anything: 'Worked on Kubernetes and helped with deployments.'"
+  expectation: "Stronger verbs and specifics without fabricating metrics that weren't given. Fabricated numbers are a failure."
