@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     anthropic_model_cheap: str = "claude-haiku-4-5"
 
     check_provider: Literal["openai", "anthropic"] = "openai"
+    judge_provider: Literal["openai", "anthropic"] = "anthropic"
     quick_mode_strategy: Literal["alternate", "openai", "anthropic"] = "alternate"
     request_timeout_seconds: int = 120
 

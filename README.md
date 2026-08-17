@@ -23,11 +23,17 @@ Every model call is persisted to Postgres (`requests` + `steps`) with prompt ver
 
 ## Status
 
-**Milestone 1 (complete):** provider layer (`generate()` only), versioned prompts, combined check, synthesis, disagreement report, graceful degradation, budgets, full execution traces, FastAPI + CLI, golden benchmark set, 21 passing tests.
+**Milestone 1 (complete):** provider layer (`generate()` only), versioned prompts, combined check, synthesis, graceful degradation, budgets, full execution traces, FastAPI + CLI, golden benchmark set.
 
-**Milestone 2 (next):** blinded judge with dimension-level verdicts, cross-critique round for reasoning disagreements, verifier auditing claims as SUPPORTED / INFERRED / UNSUPPORTED / CONTRADICTED, one bounded revision.
+**Milestone 2 (complete):** blinded judge with dimension-level verdicts (never forced to pick a winner), one cross-critique round for reasoning disagreements in deep mode, verifier on the opposite provider auditing final-answer claims as SUPPORTED / INFERRED / UNSUPPORTED / CONTRADICTED, at most one revision. Live-verified: the verifier caught a deliberately planted fake claim and demanded revision.
 
-**Milestone 3:** Next.js UI with SSE stage streaming. **Milestone 4:** evidence tools (web retrieval + sandboxed code execution).
+**Milestone 3 (next):** Next.js UI with SSE stage streaming. **Milestone 4:** evidence tools (web retrieval + sandboxed code execution).
+
+```
+council mode on disagreement:   candidates -> check -> blinded judge -> final
+deep mode on reasoning dispute: candidates -> check -> cross-critique ->
+                                judge -> verifier -> (one revision) -> final
+```
 
 ## Setup
 

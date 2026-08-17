@@ -106,8 +106,18 @@ class AnthropicProvider(ModelProvider):
 
         for block in response.content:
             if block.type == "tool_use" and block.name == "emit":
-                try:
-                    return schema.model_validate(block.input)
-                except ValidationError:
-                    return None
+                data = block.input
+                candidates = [data]
+                # Models intermittently wrap the payload in a single
+                # "parameters"/"input" envelope — unwrap and retry.
+                if isinstance(data, dict) and len(data) == 1:
+                    inner = next(iter(data.values()))
+                    if isinstance(inner, dict):
+                        candidates.append(inner)
+                for candidate in candidates:
+                    try:
+                        return schema.model_validate(candidate)
+                    except ValidationError:
+                        continue
+                return None
         return None

@@ -3,10 +3,14 @@
 quick:    route -> single candidate -> final
 council:  route -> parallel candidates -> combined check ->
           agree/partial: synthesis -> final
-          disagree:      disagreement report -> final   (judge lands in M2)
+          disagree:      blinded judge -> final
+deep:     as council, plus: one critique round before the judge when the
+          disagreement is about reasoning; verifier audits the final
+          answer's claims; at most one revision on a failed audit.
 
-Every stage is persisted to the steps table as it happens. Provider
-failures degrade gracefully and are recorded, never hidden.
+Judge and verifier run on opposite providers. Every stage is persisted to
+the steps table as it happens. Provider failures degrade gracefully and
+are recorded, never hidden.
 """
 
 import asyncio
@@ -19,7 +23,14 @@ from council.db.models import Request, Step
 from council.db.session import session_scope
 from council.engine.budget import BudgetTracker
 from council.engine.prompts import PromptRegistry
-from council.engine.schemas import CombinedCheck, Synthesis
+from council.engine.schemas import (
+    CombinedCheck,
+    Critique,
+    JudgeVerdict,
+    RevisedAnswer,
+    Synthesis,
+    VerifierReport,
+)
 from council.providers.base import ModelProvider, ModelResponse, ProviderError
 
 
@@ -32,6 +43,7 @@ class CouncilEngine:
         flagship_models: dict[str, str],
         cheap_models: dict[str, str],
         check_provider: str = "openai",
+        judge_provider: str = "anthropic",
         quick_mode_strategy: str = "alternate",
     ):
         self.providers = providers
@@ -39,7 +51,12 @@ class CouncilEngine:
         self.flagship_models = flagship_models
         self.cheap_models = cheap_models
         self.check_provider = check_provider
+        self.judge_provider = judge_provider
         self.quick_mode_strategy = quick_mode_strategy
+
+    def _other_provider(self, name: str) -> str:
+        names = sorted(self.providers)
+        return names[1] if name == names[0] else names[0]
 
     # ------------------------------------------------------------------ run
 
@@ -53,8 +70,10 @@ class CouncilEngine:
         try:
             if mode == "quick":
                 final = await self._run_quick(request_id, question, budget, seq)
-            else:  # council and deep share the V1 path; deep grows in M2/M4
-                final = await self._run_council(request_id, question, budget, seq)
+            else:
+                final = await self._run_council(
+                    request_id, question, budget, seq, deep=(mode == "deep")
+                )
         except Exception as e:
             await self._finish(request_id, status="failed", error=str(e), started=started)
             raise
@@ -97,7 +116,9 @@ class CouncilEngine:
 
     # -------------------------------------------------------------- council
 
-    async def _run_council(self, request_id: str, question: str, budget, seq) -> dict:
+    async def _run_council(
+        self, request_id: str, question: str, budget, seq, deep: bool = False
+    ) -> dict:
         prompt = self.registry.get("candidate")
         # Randomize which provider is Candidate A — blinding starts at birth,
         # and the judge in M2 inherits it for free.
@@ -148,22 +169,45 @@ class CouncilEngine:
             await self._record_stage(request_id, seq(), "disagreement_report", {"fallback": True})
             return {"status": "complete", "final_answer": report, "degraded": True}
 
+        result: dict
+        critiques: dict[str, Critique] | None = None
+
         if check.agreement in ("agree", "partial"):
             synthesis = await self._synthesize(request_id, question, candidates, check, budget, seq)
             if synthesis is not None:
-                return {"status": "complete", "final_answer": synthesis.final_answer}
-            # Synthesis failed — candidates agreed, so candidate A is a safe answer.
-            return {
-                "status": "complete",
-                "final_answer": candidates["A"].content,
-                "degraded": True,
-            }
+                result = {"status": "complete", "final_answer": synthesis.final_answer}
+            else:
+                # Synthesis failed — candidates agreed, so candidate A is safe.
+                result = {
+                    "status": "complete",
+                    "final_answer": candidates["A"].content,
+                    "degraded": True,
+                }
+        else:
+            # Reasoning/design disputes earn one critique round in deep mode.
+            # Factual disputes skip it — evidence (M4) settles facts, not debate.
+            if deep and check.disagreement_type in ("reasoning", "both"):
+                critiques = await self._critique_round(
+                    request_id, question, candidates, budget, seq
+                )
 
-        report = _disagreement_report(candidates, check)
-        await self._record_stage(
-            request_id, seq(), "disagreement_report", check.model_dump()
-        )
-        return {"status": "complete", "final_answer": report}
+            verdict = await self._judge(
+                request_id, question, candidates, check, critiques, budget, seq
+            )
+            if verdict is None:
+                # Judge failed: fall back to the both-answers report, visibly.
+                report = _disagreement_report(candidates, check)
+                await self._record_stage(
+                    request_id, seq(), "disagreement_report", {"fallback": True}
+                )
+                return {"status": "complete", "final_answer": report, "degraded": True}
+            result = {"status": "complete", "final_answer": verdict.final_answer}
+
+        if deep and result.get("final_answer"):
+            result = await self._verify_and_maybe_revise(
+                request_id, question, result, candidates, critiques, budget, seq
+            )
+        return result
 
     async def _combined_check(
         self, request_id, question, candidates, budget, seq
@@ -225,6 +269,185 @@ class CouncilEngine:
             output=resp.parsed.model_dump(),
         )
         return resp.parsed
+
+    async def _critique_round(
+        self, request_id, question, candidates, budget, seq
+    ) -> dict[str, Critique] | None:
+        """Each candidate's author reviews the OTHER candidate. One round, ever."""
+        prompt = self.registry.get("critique")
+        author_of = {
+            label: candidates[label].provider for label in ("A", "B")
+        }
+
+        async def critique_of(label: str) -> ModelResponse:
+            reviewed = candidates[label]
+            other_label = "B" if label == "A" else "A"
+            reviewer_name = author_of[other_label]
+            reviewer = self.providers[reviewer_name]
+            user = (
+                f"QUESTION:\n{question}\n\n"
+                f"THE ANSWER YOU ARE REVIEWING:\n{reviewed.content}\n\n"
+                f"YOUR OWN ANSWER (context):\n{candidates[other_label].content}"
+            )
+            return await reviewer.generate(
+                [
+                    {"role": "system", "content": prompt.text},
+                    {"role": "user", "content": user},
+                ],
+                model=self.flagship_models[reviewer_name],
+                schema=Critique,
+            )
+
+        budget.spend("critique_of_a")
+        budget.spend("critique_of_b")
+        results = await asyncio.gather(
+            critique_of("A"), critique_of("B"), return_exceptions=True
+        )
+        critiques: dict[str, Critique] = {}
+        for label, res in zip(("A", "B"), results, strict=True):
+            stage = f"critique_of_{label.lower()}"
+            if isinstance(res, Exception):
+                await self._record_error(
+                    request_id, seq(), stage, "unknown", res
+                )
+            else:
+                critiques[label] = res.parsed
+                await self._record_call(
+                    request_id, seq(), stage, res, prompt.version_id,
+                    output=res.parsed.model_dump(),
+                )
+        # Partial critiques are still useful; total failure means none.
+        return critiques or None
+
+    async def _judge(
+        self, request_id, question, candidates, check, critiques, budget, seq
+    ) -> JudgeVerdict | None:
+        prompt = self.registry.get("judge")
+        provider = self.providers[self.judge_provider]
+        model = self.flagship_models[self.judge_provider]
+        parts = [
+            f"QUESTION:\n{question}",
+            f"CANDIDATE A:\n{candidates['A'].content}",
+            f"CANDIDATE B:\n{candidates['B'].content}",
+            f"COMPARISON SUMMARY:\n{check.summary}",
+        ]
+        if critiques:
+            for label in ("A", "B"):
+                if label in critiques:
+                    c = critiques[label]
+                    issues = "\n".join(
+                        f"- [{i.severity}/{i.kind}] {i.detail}" for i in c.issues
+                    ) or "(no material issues found)"
+                    parts.append(f"CRITIQUE OF CANDIDATE {label}:\n{issues}\n{c.overall}")
+        budget.spend("judge")
+        try:
+            resp = await provider.generate(
+                [
+                    {"role": "system", "content": prompt.text},
+                    {"role": "user", "content": "\n\n".join(parts)},
+                ],
+                model=model,
+                schema=JudgeVerdict,
+                max_tokens=8192,
+            )
+        except ProviderError as e:
+            await self._record_error(request_id, seq(), "judge", provider.name, e)
+            return None
+        verdict: JudgeVerdict = resp.parsed
+        await self._record_call(
+            request_id, seq(), "judge", resp, prompt.version_id,
+            output=verdict.model_dump(),
+        )
+        return verdict
+
+    async def _verify_and_maybe_revise(
+        self, request_id, question, result, candidates, critiques, budget, seq
+    ) -> dict:
+        """Deep mode's audit: verifier on the opposite provider from the judge;
+        at most one revision; verifier failure degrades, never blocks."""
+        prompt = self.registry.get("verifier")
+        verifier_name = self._other_provider(self.judge_provider)
+        provider = self.providers[verifier_name]
+        model = self.flagship_models[verifier_name]
+
+        source = [
+            f"CANDIDATE A:\n{candidates['A'].content}",
+            f"CANDIDATE B:\n{candidates['B'].content}",
+        ]
+        if critiques:
+            for label, c in critiques.items():
+                source.append(f"CRITIQUE OF {label}:\n{c.overall}")
+        user = (
+            f"QUESTION:\n{question}\n\n"
+            f"FINAL ANSWER UNDER AUDIT:\n{result['final_answer']}\n\n"
+            f"SOURCE MATERIAL:\n\n" + "\n\n".join(source)
+        )
+        budget.spend("verifier")
+        try:
+            resp = await provider.generate(
+                [
+                    {"role": "system", "content": prompt.text},
+                    {"role": "user", "content": user},
+                ],
+                model=model,
+                schema=VerifierReport,
+                max_tokens=8192,
+            )
+        except ProviderError as e:
+            await self._record_error(request_id, seq(), "verifier", verifier_name, e)
+            return {**result, "degraded": True}
+        report: VerifierReport = resp.parsed
+        await self._record_call(
+            request_id, seq(), "verifier", resp, prompt.version_id,
+            output=report.model_dump(),
+        )
+        if report.verdict == "pass":
+            return result
+
+        revised = await self._revise(
+            request_id, question, result["final_answer"], report, candidates, budget, seq
+        )
+        if revised is None:
+            # Revision failed — ship the audited answer with the flags visible.
+            return {**result, "degraded": True}
+        return {**result, "final_answer": revised.final_answer}
+
+    async def _revise(
+        self, request_id, question, final_answer, report: VerifierReport,
+        candidates, budget, seq,
+    ) -> RevisedAnswer | None:
+        prompt = self.registry.get("revision")
+        provider = self.providers[self.judge_provider]
+        model = self.flagship_models[self.judge_provider]
+        user = (
+            f"QUESTION:\n{question}\n\n"
+            f"CURRENT FINAL ANSWER:\n{final_answer}\n\n"
+            f"VERIFIER REASONS FOR REVISION:\n"
+            + "\n".join(f"- {r}" for r in report.reasons)
+            + "\n\nSOURCE MATERIAL:\n\n"
+            f"CANDIDATE A:\n{candidates['A'].content}\n\n"
+            f"CANDIDATE B:\n{candidates['B'].content}"
+        )
+        budget.spend("revision")
+        try:
+            resp = await provider.generate(
+                [
+                    {"role": "system", "content": prompt.text},
+                    {"role": "user", "content": user},
+                ],
+                model=model,
+                schema=RevisedAnswer,
+                max_tokens=8192,
+            )
+        except ProviderError as e:
+            await self._record_error(request_id, seq(), "revision", provider.name, e)
+            return None
+        revised: RevisedAnswer = resp.parsed
+        await self._record_call(
+            request_id, seq(), "revision", resp, prompt.version_id,
+            output=revised.model_dump(),
+        )
+        return revised
 
     # ------------------------------------------------------------ persistence
 

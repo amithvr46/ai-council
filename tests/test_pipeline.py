@@ -58,20 +58,22 @@ async def test_council_agreement_synthesizes(make_engine):
     assert result["totals"]["model_calls"] == 4
 
 
-async def test_council_disagreement_reports_both(make_engine):
+async def test_council_disagreement_never_synthesizes(make_engine):
+    """Since M2 a council disagreement goes to the judge (see
+    test_judge_verifier); what must never happen is a synthesis call."""
+    from tests.test_judge_verifier import VERDICT
+
     openai = FakeProvider("openai", ["Port is 5432", DISAGREE_CHECK])
-    anthropic = FakeProvider("anthropic", ["Port is 5433"])
-    engine = make_engine(openai, anthropic, check_provider="openai")
+    anthropic = FakeProvider("anthropic", ["Port is 5433", VERDICT])
+    engine = make_engine(openai, anthropic, check_provider="openai", judge_provider="anthropic")
 
     result = await engine.run("q?", "council")
 
     assert result["status"] == "complete"
-    fa = result["final_answer"]
-    assert "Candidate A" in fa and "Candidate B" in fa
-    assert "conflict on the port number" in fa
     stages = [s["stage"] for s in result["steps"]]
-    assert "disagreement_report" in stages
     assert "synthesis" not in stages  # no wasted call on disagreement
+    assert "judge" in stages
+    assert result["final_answer"] == VERDICT.final_answer
 
 
 async def test_council_degrades_when_one_provider_fails(make_engine):

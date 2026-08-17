@@ -32,5 +32,6 @@ def build_engine() -> CouncilEngine:
             "anthropic": s.anthropic_model_cheap,
         },
         check_provider=s.check_provider,
+        judge_provider=s.judge_provider,
         quick_mode_strategy=s.quick_mode_strategy,
     )
