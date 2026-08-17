@@ -25,7 +25,7 @@ class FakeProvider(ModelProvider):
         *,
         model,
         schema: type[BaseModel] | None = None,
-        temperature: float = 0.2,
+        temperature: float | None = None,
         max_tokens: int = 4096,
     ) -> ModelResponse:
         self.calls.append({"messages": messages, "model": model, "schema": schema})

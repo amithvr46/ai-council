@@ -26,7 +26,7 @@ class OpenAIProvider(ModelProvider):
         *,
         model: str,
         schema: type[BaseModel] | None = None,
-        temperature: float = 0.2,
+        temperature: float | None = None,
         max_tokens: int = 4096,
     ) -> ModelResponse:
         kwargs: dict = {
@@ -34,7 +34,8 @@ class OpenAIProvider(ModelProvider):
             "messages": messages,
             "max_completion_tokens": max_tokens,
         }
-        # Some reasoning-class models reject temperature; only send non-default.
+        # Current-generation models reject temperature as deprecated;
+        # only send it when a caller explicitly asks.
         if temperature is not None:
             kwargs["temperature"] = temperature
         if schema is not None:

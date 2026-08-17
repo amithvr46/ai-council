@@ -12,9 +12,9 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://council:council@localhost:5432/council"
 
-    openai_model_flagship: str = "gpt-5.1"
-    openai_model_cheap: str = "gpt-5-mini"
-    anthropic_model_flagship: str = "claude-sonnet-4-5"
+    openai_model_flagship: str = "gpt-5.6-sol"
+    openai_model_cheap: str = "gpt-5.6-luna"
+    anthropic_model_flagship: str = "claude-sonnet-5"
     anthropic_model_cheap: str = "claude-haiku-4-5"
 
     check_provider: Literal["openai", "anthropic"] = "openai"

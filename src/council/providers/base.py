@@ -11,11 +11,16 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-# USD per 1M tokens: (input, output). Unknown models cost 0 and log a warning
-# at call time — update this table as pricing changes.
+# USD per 1M tokens: (input, output). Verified 2026-08-17 against vendor
+# pricing pages. Unknown models cost 0 — update this table as pricing changes.
 PRICING: dict[str, tuple[float, float]] = {
+    "gpt-5.6-sol": (5.00, 30.00),
+    "gpt-5.6-terra": (2.00, 12.00),
+    "gpt-5.6-luna": (0.20, 1.20),
     "gpt-5.1": (1.25, 10.00),
     "gpt-5-mini": (0.25, 2.00),
+    "claude-sonnet-5": (2.00, 10.00),
+    "claude-opus-5": (5.00, 25.00),
     "claude-sonnet-4-5": (3.00, 15.00),
     "claude-haiku-4-5": (1.00, 5.00),
 }
@@ -75,12 +80,13 @@ class ModelProvider(ABC):
         *,
         model: str,
         schema: type[BaseModel] | None = None,
-        temperature: float = 0.2,
+        temperature: float | None = None,
         max_tokens: int = 4096,
     ) -> ModelResponse:
         """Run one completion. If schema is given, response.parsed holds a
         validated instance; implementations retry exactly once on malformed
-        output, then raise MalformedOutput."""
+        output, then raise MalformedOutput. temperature=None omits the
+        parameter — current-generation models reject it as deprecated."""
 
 
 def validate_or_none(schema: type[BaseModel], text: str) -> BaseModel | None:

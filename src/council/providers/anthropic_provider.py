@@ -25,7 +25,7 @@ class AnthropicProvider(ModelProvider):
         *,
         model: str,
         schema: type[BaseModel] | None = None,
-        temperature: float = 0.2,
+        temperature: float | None = None,
         max_tokens: int = 4096,
     ) -> ModelResponse:
         system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
@@ -35,8 +35,11 @@ class AnthropicProvider(ModelProvider):
             "model": model,
             "messages": chat,
             "max_tokens": max_tokens,
-            "temperature": temperature,
         }
+        # Current-generation models reject temperature as deprecated;
+        # only send it when a caller explicitly asks.
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         if system:
             kwargs["system"] = system
         if schema is not None:
