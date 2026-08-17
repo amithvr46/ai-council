@@ -119,8 +119,8 @@ async def test_deep_verifier_revise_triggers_single_revision(make_engine):
 
 
 async def test_deep_agreement_still_verified(make_engine):
-    openai = FakeProvider("openai", ["GPT answer", AGREE, SYNTH, PASS_REPORT])
-    anthropic = FakeProvider("anthropic", ["Claude answer"])
+    openai = FakeProvider("openai", ["GPT answer", AGREE, SYNTH])
+    anthropic = FakeProvider("anthropic", ["Claude answer", PASS_REPORT])
     engine = make_engine(openai, anthropic, check_provider="openai", judge_provider="anthropic")
 
     result = await engine.run("q?", "deep")
@@ -129,6 +129,73 @@ async def test_deep_agreement_still_verified(make_engine):
     stages = [s["stage"] for s in result["steps"]]
     assert "verifier" in stages  # deep verifies even on agreement
     assert "judge" not in stages
+
+
+async def test_deep_agreement_verifier_is_independent_of_synthesizer(make_engine):
+    """GPT M2 review #1: on the agreement path the answer is produced by the
+    check provider's synthesis — the verifier must be the OTHER provider,
+    even though no judge ran."""
+    openai = FakeProvider("openai", ["GPT answer", AGREE, SYNTH])
+    anthropic = FakeProvider("anthropic", ["Claude answer", PASS_REPORT])
+    # check_provider=openai AND judge_provider=anthropic: the old bug picked
+    # opposite-of-judge (= openai), same provider that synthesized.
+    engine = make_engine(openai, anthropic, check_provider="openai", judge_provider="anthropic")
+
+    result = await engine.run("q?", "deep")
+
+    synthesis_step = next(s for s in result["steps"] if s["stage"] == "synthesis")
+    verifier_step = next(s for s in result["steps"] if s["stage"] == "verifier")
+    assert synthesis_step["provider"] == "openai"
+    assert verifier_step["provider"] == "anthropic"
+    assert verifier_step["provider"] != synthesis_step["provider"]
+
+
+async def test_judge_told_no_evidence_on_factual_dispute(make_engine):
+    """GPT M2 review #2: until evidence tools exist, the judge must be
+    explicitly told it cannot settle factual disputes by plausibility."""
+    openai = FakeProvider("openai", ["GPT answer", FACTUAL_DISAGREE, PASS_REPORT])
+    anthropic = FakeProvider("anthropic", ["Claude answer", VERDICT])
+    engine = make_engine(openai, anthropic, check_provider="openai", judge_provider="anthropic")
+
+    await engine.run("q?", "deep")
+
+    judge_call = next(c for c in anthropic.calls
+                      if c["schema"] is not None and c["schema"].__name__ == "JudgeVerdict")
+    user_content = "\n".join(m["content"] for m in judge_call["messages"])
+    assert "NO EXTERNAL EVIDENCE" in user_content
+    assert "uncertain" in user_content
+
+
+async def test_judge_not_warned_on_reasoning_dispute(make_engine):
+    openai = FakeProvider("openai", ["GPT answer", REASONING_DISAGREE])
+    anthropic = FakeProvider("anthropic", ["Claude answer", VERDICT])
+    engine = make_engine(openai, anthropic, check_provider="openai", judge_provider="anthropic")
+
+    await engine.run("q?", "council")
+
+    judge_call = next(c for c in anthropic.calls
+                      if c["schema"] is not None and c["schema"].__name__ == "JudgeVerdict")
+    user_content = "\n".join(m["content"] for m in judge_call["messages"])
+    assert "NO EXTERNAL EVIDENCE" not in user_content
+
+
+async def test_failed_critique_records_real_provider(make_engine):
+    """GPT M2 review #3: a failed critique must be attributed to the actual
+    reviewer provider, not 'unknown'."""
+    openai = FakeProvider(
+        "openai", ["GPT answer", REASONING_DISAGREE, ProviderError("boom"), PASS_REPORT]
+    )
+    anthropic = FakeProvider("anthropic", ["Claude answer", CLEAN_CRITIQUE, VERDICT])
+    engine = make_engine(openai, anthropic, check_provider="openai", judge_provider="anthropic")
+
+    result = await engine.run("q?", "deep")
+
+    error_steps = [
+        s for s in result["steps"]
+        if s["status"] == "error" and s["stage"].startswith("critique_of_")
+    ]
+    assert len(error_steps) == 1
+    assert error_steps[0]["provider"] == "openai"
 
 
 async def test_judge_failure_falls_back_to_report(make_engine):

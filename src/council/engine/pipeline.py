@@ -184,11 +184,15 @@ class CouncilEngine:
 
         result: dict
         critiques: dict[str, Critique] | None = None
+        # The provider that produced the final answer — the verifier must be
+        # the OTHER one, whichever path built the answer (GPT M2 review #1).
+        producer: str
 
         if check.agreement in ("agree", "partial"):
             synthesis = await self._synthesize(request_id, question, candidates, check, budget, seq)
             if synthesis is not None:
                 result = {"status": "complete", "final_answer": synthesis.final_answer}
+                producer = self.check_provider
             else:
                 # Synthesis failed — candidates agreed, so candidate A is safe.
                 result = {
@@ -196,6 +200,7 @@ class CouncilEngine:
                     "final_answer": candidates["A"].content,
                     "degraded": True,
                 }
+                producer = candidates["A"].provider
         else:
             # Reasoning/design disputes earn one critique round in deep mode.
             # Factual disputes skip it — evidence (M4) settles facts, not debate.
@@ -215,10 +220,12 @@ class CouncilEngine:
                 )
                 return {"status": "complete", "final_answer": report, "degraded": True}
             result = {"status": "complete", "final_answer": verdict.final_answer}
+            producer = self.judge_provider
 
         if deep and result.get("final_answer"):
             result = await self._verify_and_maybe_revise(
-                request_id, question, result, candidates, critiques, budget, seq
+                request_id, question, result, candidates, critiques, budget, seq,
+                producer=producer,
             )
         return result
 
@@ -319,9 +326,12 @@ class CouncilEngine:
         critiques: dict[str, Critique] = {}
         for label, res in zip(("A", "B"), results, strict=True):
             stage = f"critique_of_{label.lower()}"
+            # The reviewer of a candidate is deterministically the author of
+            # the OTHER candidate — record the real provider on failure too.
+            reviewer_name = author_of["B" if label == "A" else "A"]
             if isinstance(res, Exception):
                 await self._record_error(
-                    request_id, seq(), stage, "unknown", res
+                    request_id, seq(), stage, reviewer_name, res
                 )
             else:
                 critiques[label] = res.parsed
@@ -344,6 +354,19 @@ class CouncilEngine:
             f"CANDIDATE B:\n{candidates['B'].content}",
             f"COMPARISON SUMMARY:\n{check.summary}",
         ]
+        if check.disagreement_type in ("factual", "both"):
+            # Evidence tools land in M4. Until then the judge must not settle
+            # a checkable factual dispute by plausibility (frozen rule:
+            # factual disagreement -> evidence, not debate or model voting).
+            parts.append(
+                "NO EXTERNAL EVIDENCE IS AVAILABLE for this request. The "
+                "candidates disagree on checkable facts. You must NOT resolve "
+                "a factual dispute by which claim sounds more plausible or "
+                "confident. If the supplied material itself does not settle a "
+                "disputed fact, your decision must be 'uncertain' and the "
+                "final answer must present both positions honestly and state "
+                "what evidence would settle the question."
+            )
         if critiques:
             for label in ("A", "B"):
                 if label in critiques:
@@ -374,12 +397,14 @@ class CouncilEngine:
         return verdict
 
     async def _verify_and_maybe_revise(
-        self, request_id, question, result, candidates, critiques, budget, seq
+        self, request_id, question, result, candidates, critiques, budget, seq,
+        *, producer: str,
     ) -> dict:
-        """Deep mode's audit: verifier on the opposite provider from the judge;
+        """Deep mode's audit: verifier on the opposite provider from whichever
+        provider actually produced the final answer (judge OR synthesis);
         at most one revision; verifier failure degrades, never blocks."""
         prompt = self.registry.get("verifier")
-        verifier_name = self._other_provider(self.judge_provider)
+        verifier_name = self._other_provider(producer)
         provider = self.providers[verifier_name]
         model = self.flagship_models[verifier_name]
 
@@ -418,7 +443,8 @@ class CouncilEngine:
             return result
 
         revised = await self._revise(
-            request_id, question, result["final_answer"], report, candidates, budget, seq
+            request_id, question, result["final_answer"], report, candidates, budget, seq,
+            producer=producer,
         )
         if revised is None:
             # Revision failed — ship the audited answer with the flags visible.
@@ -427,11 +453,11 @@ class CouncilEngine:
 
     async def _revise(
         self, request_id, question, final_answer, report: VerifierReport,
-        candidates, budget, seq,
+        candidates, budget, seq, *, producer: str,
     ) -> RevisedAnswer | None:
         prompt = self.registry.get("revision")
-        provider = self.providers[self.judge_provider]
-        model = self.flagship_models[self.judge_provider]
+        provider = self.providers[producer]
+        model = self.flagship_models[producer]
         user = (
             f"QUESTION:\n{question}\n\n"
             f"CURRENT FINAL ANSWER:\n{final_answer}\n\n"
