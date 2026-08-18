@@ -96,6 +96,10 @@ export async function getTrace(id: string): Promise<Trace> {
   return r.json();
 }
 
+export async function cancelRequest(id: string): Promise<void> {
+  await fetch(`${API}/requests/${id}/cancel`, { method: "POST" });
+}
+
 export async function rate(id: string, rating: number): Promise<void> {
   await fetch(`${API}/requests/${id}/rating`, {
     method: "POST",

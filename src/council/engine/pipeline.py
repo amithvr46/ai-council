@@ -56,6 +56,7 @@ class CouncilEngine:
         self.judge_provider = judge_provider
         self.quick_mode_strategy = quick_mode_strategy
         self._publish = publish
+        self._cancel_started: dict[str, float] = {}
 
     def _emit(self, request_id: str, event: dict) -> None:
         if self._publish is not None:
@@ -120,6 +121,9 @@ class CouncilEngine:
                 final = await self._run_council(
                     request_id, question, budget, seq, deep=(mode == "deep"), history=history
                 )
+        except asyncio.CancelledError:
+            self._cancel_started[request_id] = started
+            raise  # the API layer records the cancellation
         except Exception as e:
             await self._finish(request_id, status="failed", error=str(e), started=started)
             raise
@@ -654,6 +658,23 @@ class CouncilEngine:
         self._emit(
             request_id,
             {"type": "done", "status": status, "degraded": was_degraded, "error": error},
+        )
+
+    async def mark_cancelled(self, request_id: str) -> None:
+        """Record a user-cancelled request. Whatever stages completed before
+        the stop are already persisted (and billed); nothing further runs."""
+        started = self._cancel_started.pop(request_id, None)
+        async with session_scope() as s:
+            req = await s.get(Request, request_id)
+            if req is None or req.status in ("complete", "failed"):
+                return
+            req.status = "cancelled"
+            req.error = "cancelled by user"
+            if started is not None:
+                req.latency_ms = int((time.monotonic() - started) * 1000)
+        self._emit(
+            request_id,
+            {"type": "done", "status": "cancelled", "degraded": False, "error": None},
         )
 
     async def get_request(self, request_id: str) -> dict:

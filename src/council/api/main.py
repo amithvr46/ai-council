@@ -17,6 +17,7 @@ from council.engine.factory import build_engine
 
 engine = None
 _background: set[asyncio.Task] = set()
+_running: dict[str, asyncio.Task] = {}  # request_id -> task, for cancellation
 
 
 @asynccontextmanager
@@ -124,13 +125,34 @@ async def ask_async(body: AskBody):
     async def _run():
         try:
             await engine.run(body.question, body.mode, request_id=request_id, history=history)
+        except asyncio.CancelledError:
+            # User pressed stop: mark the request and tell subscribers.
+            await engine.mark_cancelled(request_id)
+            raise
         except Exception:
             pass  # failure state is persisted + emitted by the engine itself
 
     task = asyncio.create_task(_run())
     _background.add(task)
-    task.add_done_callback(_background.discard)
+    _running[request_id] = task
+
+    def _cleanup(t: asyncio.Task) -> None:
+        _background.discard(t)
+        _running.pop(request_id, None)
+
+    task.add_done_callback(_cleanup)
     return {"id": request_id, "conversation_id": conversation_id, "status": "running"}
+
+
+@app.post("/requests/{request_id}/cancel")
+async def cancel(request_id: str):
+    """Stop an in-flight request: cancels the pipeline task so no further
+    model calls are made. Stages already completed stay in the trace."""
+    task = _running.get(request_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="no running request with that id")
+    task.cancel()
+    return {"ok": True, "id": request_id}
 
 
 # ----------------------------------------------------------- conversations
@@ -232,7 +254,7 @@ async def stream(request_id: str):
         raise HTTPException(status_code=404, detail="request not found") from None
 
     async def gen():
-        if current["status"] in ("complete", "failed"):
+        if current["status"] in ("complete", "failed", "cancelled"):
             yield _sse({"type": "done", "status": current["status"],
                         "degraded": current["degraded"], "error": current["error"]})
             return

@@ -7,6 +7,7 @@ import {
   StageEvent,
   Trace,
   askAsync,
+  cancelRequest,
   getConversation,
   getTrace,
 } from "@/lib/api";
@@ -111,6 +112,21 @@ export default function AskPage() {
     }
   }
 
+  async function stopRunning() {
+    const active = entries.find((e) => e.running && e.requestId);
+    if (!active?.requestId) return;
+    await cancelRequest(active.requestId);
+    // The server emits a 'cancelled' done event; the stream handler finishes
+    // the entry. Fallback in case the stream is already gone:
+    setTimeout(
+      () =>
+        setEntries((prev) =>
+          prev.map((e) => (e.key === active.key && e.running ? { ...e, running: false } : e))
+        ),
+      3000
+    );
+  }
+
   async function submit() {
     const question = input.trim();
     if (!question || entries.some((e) => e.running)) return;
@@ -177,7 +193,12 @@ export default function AskPage() {
                   user_rating: trace.user_rating,
                 }
               : null,
-            error: event.status === "failed" ? (event.error ?? "request failed") : null,
+            error:
+              event.status === "failed"
+                ? (event.error ?? "request failed")
+                : event.status === "cancelled"
+                  ? `stopped — ${trace.totals.model_calls} call(s) ran, $${trace.totals.cost_usd.toFixed(4)}`
+                  : null,
           });
           fetchConversations().then(setConversations);
         }
@@ -314,13 +335,23 @@ export default function AskPage() {
                   </button>
                 ))}
                 <span className="ml-1 text-[10px] text-zinc-700">Auto coming soon</span>
-                <button
-                  onClick={submit}
-                  disabled={!input.trim() || entries.some((e) => e.running)}
-                  className="ml-auto rounded-lg bg-sky-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-40"
-                >
-                  {entries.some((e) => e.running) ? "Thinking…" : "Ask"}
-                </button>
+                {entries.some((e) => e.running) ? (
+                  <button
+                    onClick={stopRunning}
+                    className="ml-auto rounded-lg border border-zinc-600 bg-zinc-800 px-4 py-1.5 text-sm font-medium text-zinc-200 hover:bg-zinc-700"
+                    title="Stop this request — no further model calls"
+                  >
+                    ■ Stop
+                  </button>
+                ) : (
+                  <button
+                    onClick={submit}
+                    disabled={!input.trim()}
+                    className="ml-auto rounded-lg bg-sky-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:opacity-40"
+                  >
+                    Ask
+                  </button>
+                )}
               </div>
             </div>
           </div>
