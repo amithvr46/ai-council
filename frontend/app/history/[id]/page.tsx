@@ -15,11 +15,11 @@ export default function TracePage({ params }: { params: Promise<{ id: string }> 
     getTrace(id).then(setTrace).catch((e) => setError(String(e)));
   }, [id]);
 
-  if (error) return <p className="text-sm text-red-400">{error}</p>;
-  if (!trace) return <p className="text-sm text-zinc-500">loading…</p>;
+  if (error) return <p className="p-6 text-sm text-red-400">{error}</p>;
+  if (!trace) return <p className="p-6 text-sm text-zinc-500">loading…</p>;
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-4xl space-y-4 px-4 py-6">
       <div className="text-sm text-zinc-400">
         <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs">{trace.mode}</span>{" "}
         <span className="text-zinc-200">{trace.question}</span>

@@ -33,7 +33,7 @@ export default function HistoryPage() {
   }, [offset]);
 
   return (
-    <div className="space-y-3">
+    <div className="mx-auto max-w-4xl space-y-3 px-4 py-6">
       <h1 className="text-lg font-semibold">History</h1>
       <div className="divide-y divide-zinc-900 rounded-xl border border-zinc-800">
         {items.map((it) => (
