@@ -29,13 +29,29 @@ Every model call is persisted to Postgres (`requests` + `steps`) with prompt ver
 
 **Milestone 3 (complete):** Next.js web UI — ask page with live stage streaming (SSE), expandable trace (candidates, agreement check, judge dimension verdicts, verifier claim audit), 1–5 rating, history browser and live cost stats. New API: `POST /ask/async`, `GET /requests/{id}/stream` (SSE), `GET /requests` (paginated), `GET /stats`.
 
-**Milestone 4 (next):** evidence tools (web retrieval + sandboxed code execution).
+**Milestone 4 (complete) — the evidence layer. V1 is done.** Deep mode gathers evidence before any answer exists: an evidence planner turns checkable claims into web searches and runnable code, the tools run under hard caps, and an assessor judges each claim strictly against what came back (SUPPORTED / CONTRADICTED / INSUFFICIENT_BY_EVIDENCE). Evidence supremacy is enforced in engine code, not just prompts:
+
+- **R1** — a factual dispute the evidence could not settle cannot be resolved by plausibility; a judge that picks a winner anyway is recorded as a constraint violation and forced into revision.
+- **R2** — a verifier `pass` cannot stand over a claim the evidence contradicted; the verdict is overridden to `revise` in code.
+- **R3** — the evidence bundle and its binding verdicts precede source material for the judge, synthesis, verifier and revision.
+- **R4** — when evidence contradicts a claim *both* candidates asserted, the agreement shortcut is disabled and the request escalates to the judge, which can reject both.
+
+Every source, executed snippet, claim and verdict is persisted (`evidence_items`, `claim_assessments`) so any decision can be audited afterwards.
 
 ```
-council mode on disagreement:   candidates -> check -> blinded judge -> final
-deep mode on reasoning dispute: candidates -> check -> cross-critique ->
-                                judge -> verifier -> (one revision) -> final
+council on disagreement:  candidates -> check -> blinded judge -> final
+deep with evidence:       candidates -> check -> evidence plan -> tools ->
+                          evidence assessment -> (critique if reasoning dispute) ->
+                          judge/synthesis -> verifier -> (one revision) -> final
 ```
+
+Evidence is deep mode only in V1. Web retrieval needs a Tavily or Brave key
+(`EVIDENCE_SEARCH_PROVIDER` in `.env`); with no key it reports itself
+unavailable and claims become INSUFFICIENT — a gap in evidence never becomes
+confidence. Code execution runs model-written Python in an isolated process
+with a temp cwd, scrubbed env, timeout and POSIX rlimits; it is a
+blast-radius limiter, not a security boundary, and can be disabled with
+`EVIDENCE_CODE_EXECUTION=false`.
 
 ## Setup
 

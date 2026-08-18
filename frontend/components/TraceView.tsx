@@ -32,6 +32,9 @@ const CLASS_COLORS: Record<string, string> = {
   INFERRED: "text-sky-400",
   UNSUPPORTED: "text-amber-400",
   CONTRADICTED: "text-red-400",
+  SUPPORTED_BY_EVIDENCE: "text-emerald-400",
+  CONTRADICTED_BY_EVIDENCE: "text-red-400",
+  INSUFFICIENT_EVIDENCE: "text-amber-400",
 };
 
 export default function TraceView({ trace }: { trace: Trace }) {
@@ -75,6 +78,68 @@ export default function TraceView({ trace }: { trace: Trace }) {
                 <li key={i}>{d}</li>
               ))}
             </ul>
+          )}
+        </Section>
+      )}
+
+      {(trace.claim_assessments?.length ?? 0) > 0 && (
+        <Section
+          title={`Evidence — ${trace.claim_assessments!.length} claim(s) checked against ${
+            trace.evidence?.length ?? 0
+          } source(s)${trace.evidence_override ? " · evidence overrode the models" : ""}`}
+        >
+          {trace.evidence_override && (
+            <p className="mb-3 rounded border border-red-900 bg-red-950/40 px-2 py-1 text-xs text-red-300">
+              Evidence contradicted or failed to settle what the models claimed — the
+              pipeline overrode them.
+            </p>
+          )}
+          <ul className="space-y-2 text-sm">
+            {trace.claim_assessments!.map((c, i) => (
+              <li key={i}>
+                <span className={`font-mono text-xs ${CLASS_COLORS[c.verdict] ?? ""}`}>
+                  [{c.verdict.replace("_BY_EVIDENCE", "").replace("_EVIDENCE", "")}]
+                </span>{" "}
+                <span className="text-zinc-300">{c.claim}</span>
+                {c.rationale && <p className="pl-4 text-xs text-zinc-500">{c.rationale}</p>}
+                {c.citations?.length > 0 && (
+                  <p className="pl-4 text-xs text-zinc-600">
+                    cites {c.citations.map((n) => `[E${n}]`).join(" ")}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ul>
+          {(trace.evidence?.length ?? 0) > 0 && (
+            <div className="mt-4 space-y-2 border-t border-zinc-800 pt-3">
+              {trace.evidence!.map((e) => (
+                <div key={e.ordinal} className="text-xs">
+                  <span className="font-mono text-zinc-500">[E{e.ordinal}]</span>{" "}
+                  <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
+                    {e.kind}
+                  </span>{" "}
+                  {e.status !== "ok" ? (
+                    <span className="text-amber-400">
+                      {e.status}: {e.error}
+                    </span>
+                  ) : e.source_url ? (
+                    <a
+                      href={e.source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sky-400 underline"
+                    >
+                      {e.title || e.source_url}
+                    </a>
+                  ) : (
+                    <span className="text-zinc-400">executed code</span>
+                  )}
+                  <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded bg-zinc-950 p-2 text-[11px] text-zinc-400">
+                    {e.kind === "code" ? `${e.query}\n\n${e.snippet}` : e.snippet}
+                  </pre>
+                </div>
+              ))}
+            </div>
           )}
         </Section>
       )}

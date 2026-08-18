@@ -16,8 +16,14 @@ would exceed the mode budget the engine raises instead of calling.
 MODE_BUDGETS: dict[str, int] = {
     "quick": 2,  # 1 primary + 1 visible failover to the other provider
     "council": 5,  # 2 candidates + combined check + (synthesis | judge) + headroom
-    "deep": 9,  # + critique round, verifier and one revision (max observed path: 8)
+    # deep worst case: 2 candidates + check + evidence plan + evidence assess
+    # + 2 critiques + judge + verifier + revision = 10, plus 1 headroom.
+    "deep": 11,
 }
+
+# Evidence tool invocations are NOT model calls and are budgeted separately
+# (see Settings.max_web_searches / max_code_executions), but they are still
+# hard-capped so no request can fan out indefinitely.
 
 
 class BudgetExceeded(RuntimeError):

@@ -62,10 +62,19 @@ class Request(Base):
     total_api_attempts: Mapped[int] = mapped_column(Integer, default=0)  # physical invocations
     user_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    evidence_used: Mapped[bool] = mapped_column(Boolean, default=False)
+    evidence_override: Mapped[bool] = mapped_column(Boolean, default=False)
+
     steps: Mapped[list["Step"]] = relationship(
         back_populates="request", order_by="Step.seq", cascade="all, delete-orphan"
     )
     conversation: Mapped[Conversation | None] = relationship(back_populates="requests")
+    evidence_items: Mapped[list["EvidenceItemRow"]] = relationship(
+        back_populates="request", cascade="all, delete-orphan"
+    )
+    claim_assessments: Mapped[list["ClaimAssessmentRow"]] = relationship(
+        back_populates="request", cascade="all, delete-orphan"
+    )
 
 
 class Step(Base):
@@ -93,3 +102,46 @@ class Step(Base):
     api_attempts: Mapped[int] = mapped_column(Integer, default=1)  # 2 when the retry fired
 
     request: Mapped[Request] = relationship(back_populates="steps")
+
+
+class EvidenceItemRow(Base):
+    """One retrieved piece of evidence — a search result or an execution."""
+
+    __tablename__ = "evidence_items"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    request_id: Mapped[str] = mapped_column(ForeignKey("requests.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    ordinal: Mapped[int] = mapped_column(Integer)  # the [E<n>] label shown to models
+
+    kind: Mapped[str] = mapped_column(String(16))  # web | code
+    query: Mapped[str] = mapped_column(Text)  # search query or executed source
+    status: Mapped[str] = mapped_column(String(16), default="ok")  # ok|error|unavailable
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snippet: Mapped[str] = mapped_column(Text, default="")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    request: Mapped[Request] = relationship(back_populates="evidence_items")
+
+
+class ClaimAssessmentRow(Base):
+    """A checkable claim judged against the evidence bundle — the record that
+    makes 'evidence outranked the models' auditable after the fact."""
+
+    __tablename__ = "claim_assessments"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    request_id: Mapped[str] = mapped_column(ForeignKey("requests.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    claim: Mapped[str] = mapped_column(Text)
+    made_by: Mapped[str] = mapped_column(String(8))  # A | B | both
+    verdict: Mapped[str] = mapped_column(String(32))
+    # SUPPORTED_BY_EVIDENCE | CONTRADICTED_BY_EVIDENCE | INSUFFICIENT_EVIDENCE
+    rationale: Mapped[str] = mapped_column(Text, default="")
+    citations: Mapped[list | None] = mapped_column(JSON, nullable=True)  # ordinals of items
+
+    request: Mapped[Request] = relationship(back_populates="claim_assessments")

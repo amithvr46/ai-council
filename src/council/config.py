@@ -22,6 +22,15 @@ class Settings(BaseSettings):
     quick_mode_strategy: Literal["alternate", "openai", "anthropic"] = "alternate"
     request_timeout_seconds: int = 120
 
+    # --- evidence layer (deep mode) ---
+    evidence_search_provider: Literal["tavily", "brave", "none"] = "none"
+    tavily_api_key: str = ""
+    brave_api_key: str = ""
+    evidence_code_execution: bool = True
+    evidence_code_timeout_seconds: int = 15
+    max_web_searches: int = 3
+    max_code_executions: int = 2
+
 
 @lru_cache
 def get_settings() -> Settings:

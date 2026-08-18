@@ -4,6 +4,7 @@ from council.config import get_settings
 from council.engine.events import bus
 from council.engine.pipeline import CouncilEngine
 from council.engine.prompts import default_registry
+from council.evidence import build_tools
 from council.providers.anthropic_provider import AnthropicProvider
 from council.providers.openai_provider import OpenAIProvider
 
@@ -36,4 +37,7 @@ def build_engine() -> CouncilEngine:
         judge_provider=s.judge_provider,
         quick_mode_strategy=s.quick_mode_strategy,
         publish=bus.publish,
+        evidence_tools=build_tools(s),
+        max_web_searches=s.max_web_searches,
+        max_code_executions=s.max_code_executions,
     )

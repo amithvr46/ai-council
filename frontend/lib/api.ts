@@ -29,6 +29,26 @@ export type Step = {
   api_attempts: number;
 };
 
+export type EvidenceRow = {
+  ordinal: number;
+  kind: string;
+  query: string;
+  status: string;
+  source_url: string | null;
+  title: string | null;
+  snippet: string;
+  error: string | null;
+  latency_ms: number;
+};
+
+export type ClaimAssessment = {
+  claim: string;
+  made_by: string;
+  verdict: string;
+  rationale: string;
+  citations: number[];
+};
+
 export type Trace = {
   id: string;
   question: string;
@@ -37,6 +57,10 @@ export type Trace = {
   final_answer: string | null;
   degraded: boolean;
   error: string | null;
+  evidence_used?: boolean;
+  evidence_override?: boolean;
+  evidence?: EvidenceRow[];
+  claim_assessments?: ClaimAssessment[];
   totals: {
     input_tokens: number;
     output_tokens: number;

@@ -19,13 +19,15 @@ import time
 
 from sqlalchemy import func, select
 
-from council.db.models import Request, Step
+from council.db.models import ClaimAssessmentRow, EvidenceItemRow, Request, Step
 from council.db.session import session_scope
 from council.engine.budget import BudgetTracker
 from council.engine.prompts import PromptRegistry
 from council.engine.schemas import (
     CombinedCheck,
     Critique,
+    EvidenceAssessment,
+    EvidencePlan,
     JudgeVerdict,
     RevisedAnswer,
     Synthesis,
@@ -47,6 +49,9 @@ class CouncilEngine:
         judge_provider: str = "anthropic",
         quick_mode_strategy: str = "alternate",
         publish=None,  # optional callable(request_id, event_dict) for live progress
+        evidence_tools: dict | None = None,
+        max_web_searches: int = 3,
+        max_code_executions: int = 2,
     ):
         self.providers = providers
         self.registry = registry
@@ -56,6 +61,9 @@ class CouncilEngine:
         self.judge_provider = judge_provider
         self.quick_mode_strategy = quick_mode_strategy
         self._publish = publish
+        self.evidence_tools = evidence_tools or {}
+        self.max_web_searches = max_web_searches
+        self.max_code_executions = max_code_executions
         self._cancel_started: dict[str, float] = {}
         # Provider calls that have been initiated but not yet returned. If a
         # request is cancelled mid-flight these are persisted as interrupted
@@ -297,8 +305,37 @@ class CouncilEngine:
         # the OTHER one, whichever path built the answer (GPT M2 review #1).
         producer: str
 
-        if check.agreement in ("agree", "partial"):
-            synthesis = await self._synthesize(request_id, question, candidates, check, budget, seq)
+        # --- evidence layer (deep mode) --------------------------------
+        # Gathered BEFORE any answer is produced, so its verdicts constrain
+        # the answer rather than being audited into it afterwards.
+        evidence: EvidenceContext | None = None
+        if deep and check.checkable_claims:
+            evidence = await self._gather_and_assess_evidence(
+                request_id, question, candidates, check, budget, seq
+            )
+
+        # R4: when evidence contradicts a claim BOTH candidates asserted,
+        # agreement is no longer a shortcut. Escalate to the judge, which can
+        # reject both — synthesis would only launder the shared error.
+        agreement_path = check.agreement in ("agree", "partial")
+        if agreement_path and evidence and evidence.contradicted:
+            agreement_path = False
+            await self._record_stage(
+                request_id,
+                seq(),
+                "evidence_override",
+                {
+                    "reason": "evidence contradicts a claim both candidates asserted",
+                    "contradicted_claims": [c.claim for c in evidence.contradicted],
+                    "escalated_to": "judge",
+                },
+            )
+            await self._set_evidence_override(request_id)
+
+        if agreement_path:
+            synthesis = await self._synthesize(
+                request_id, question, candidates, check, budget, seq, evidence
+            )
             if synthesis is not None:
                 result = {"status": "complete", "final_answer": synthesis.final_answer}
                 producer = self.check_provider
@@ -312,14 +349,14 @@ class CouncilEngine:
                 producer = candidates["A"].provider
         else:
             # Reasoning/design disputes earn one critique round in deep mode.
-            # Factual disputes skip it — evidence (M4) settles facts, not debate.
+            # Factual disputes go to evidence, not debate.
             if deep and check.disagreement_type in ("reasoning", "both"):
                 critiques = await self._critique_round(
                     request_id, question, candidates, budget, seq
                 )
 
             verdict = await self._judge(
-                request_id, question, candidates, check, critiques, budget, seq
+                request_id, question, candidates, check, critiques, budget, seq, evidence
             )
             if verdict is None:
                 # Judge failed: fall back to the both-answers report, visibly.
@@ -331,11 +368,40 @@ class CouncilEngine:
             result = {"status": "complete", "final_answer": verdict.final_answer}
             producer = self.judge_provider
 
+            # R1: a factual dispute the evidence could not settle must stay
+            # unresolved. Enforced in code — the judge choosing a winner on
+            # plausibility is recorded as a violation and forced to revision.
+            if (
+                evidence is not None
+                and check.disagreement_type in ("factual", "both")
+                and not evidence.decisive
+                and verdict.decision not in ("uncertain", "reject_both")
+            ):
+                await self._record_stage(
+                    request_id,
+                    seq(),
+                    "evidence_constraint_violation",
+                    {
+                        "rule": "insufficient evidence on a factual dispute requires uncertainty",
+                        "judge_decision": verdict.decision,
+                        "forced": "revision",
+                    },
+                )
+                await self._set_evidence_override(request_id)
+                result["force_revision_reasons"] = [
+                    "The evidence gathered did not settle the disputed factual claim(s): "
+                    + "; ".join(c.claim for c in evidence.insufficient)
+                    + ". Present both positions honestly, state plainly that the available "
+                    "evidence does not resolve it, and say what would settle it. Do not "
+                    "choose a side on plausibility."
+                ]
+
         if deep and result.get("final_answer"):
             result = await self._verify_and_maybe_revise(
                 request_id, question, result, candidates, critiques, budget, seq,
-                producer=producer,
+                producer=producer, evidence=evidence,
             )
+        result.pop("force_revision_reasons", None)
         return result
 
     async def _combined_check(
@@ -372,7 +438,7 @@ class CouncilEngine:
         return resp.parsed
 
     async def _synthesize(
-        self, request_id, question, candidates, check, budget, seq
+        self, request_id, question, candidates, check, budget, seq, evidence=None
     ) -> Synthesis | None:
         prompt = self.registry.get("synthesis")
         provider = self.providers[self.check_provider]
@@ -383,6 +449,8 @@ class CouncilEngine:
             f"CANDIDATE B:\n{candidates['B'].content}\n\n"
             f"COMPARISON SUMMARY:\n{check.summary}"
         )
+        if evidence is not None:
+            user += f"\n\n{evidence.render()}"
         budget.spend("synthesis")
         cb = self._delta_cb(request_id, "synthesis", extract_field=True)
         try:
@@ -408,6 +476,202 @@ class CouncilEngine:
             output=resp.parsed.model_dump(),
         )
         return resp.parsed
+
+    # ------------------------------------------------------------- evidence
+
+    async def _gather_and_assess_evidence(
+        self, request_id, question, candidates, check, budget, seq
+    ) -> "EvidenceContext | None":
+        """Plan checks, run the tools, then judge the claims against what came
+        back. Tool failures and gaps become INSUFFICIENT verdicts — never
+        silent absence — so uncertainty survives to the final answer."""
+        plan = await self._plan_evidence(request_id, question, candidates, check, budget, seq)
+        if plan is None or not plan.queries:
+            return None
+
+        items = await self._run_evidence_tools(request_id, plan, seq)
+        if not items:
+            return None
+        await self._persist_evidence(request_id, items)
+
+        assessment = await self._assess_evidence(
+            request_id, question, check, items, budget, seq
+        )
+        if assessment is None:
+            return None
+        await self._persist_assessment(request_id, assessment)
+        await self._mark_evidence_used(request_id)
+        return EvidenceContext(items=items, assessment=assessment)
+
+    async def _plan_evidence(
+        self, request_id, question, candidates, check, budget, seq
+    ) -> EvidencePlan | None:
+        prompt = self.registry.get("evidence_plan")
+        provider = self.providers[self.check_provider]
+        model = self.cheap_models[self.check_provider]
+        claims = "\n".join(
+            f"- ({c.made_by}) {c.claim} — matters because: {c.why_material}"
+            for c in check.checkable_claims
+        )
+        tools = ", ".join(
+            f"{name} ({'available' if tool.available else 'UNAVAILABLE'})"
+            for name, tool in self.evidence_tools.items()
+        )
+        user = (
+            f"QUESTION:\n{question}\n\n"
+            f"CHECKABLE CLAIMS:\n{claims}\n\n"
+            f"CANDIDATE A:\n{candidates['A'].content[:3000]}\n\n"
+            f"CANDIDATE B:\n{candidates['B'].content[:3000]}\n\n"
+            f"TOOLS: {tools}\n"
+            f"LIMITS: at most {self.max_web_searches} web searches and "
+            f"{self.max_code_executions} code executions."
+        )
+        budget.spend("evidence_plan")
+        try:
+            resp = await self._generate(
+                request_id,
+                "evidence_plan",
+                provider,
+                model,
+                [
+                    {"role": "system", "content": prompt.text},
+                    {"role": "user", "content": user},
+                ],
+                schema=EvidencePlan,
+            )
+        except ProviderError as e:
+            await self._record_error(request_id, seq(), "evidence_plan", provider.name, e)
+            return None
+        await self._record_call(
+            request_id, seq(), "evidence_plan", resp, prompt.version_id,
+            output=resp.parsed.model_dump(),
+        )
+        return resp.parsed
+
+    async def _run_evidence_tools(self, request_id, plan: EvidencePlan, seq) -> list:
+        """Execute the plan within per-tool caps. Tool calls are not model
+        calls and are budgeted separately, but still hard-capped."""
+        used = {"web": 0, "code": 0}
+        caps = {"web": self.max_web_searches, "code": self.max_code_executions}
+        gathered: list = []
+        skipped: list[str] = []
+
+        for query in plan.queries:
+            tool = self.evidence_tools.get(query.tool)
+            if tool is None:
+                continue
+            if used[query.tool] >= caps[query.tool]:
+                skipped.append(f"{query.tool}: {query.query[:80]}")
+                continue
+            used[query.tool] += 1
+            results = await tool.run(query.query)
+            gathered.extend(results)
+            self._emit(
+                request_id,
+                {
+                    "type": "stage",
+                    "stage": f"evidence_{query.tool}",
+                    "status": results[0].status if results else "error",
+                },
+            )
+
+        await self._record_stage(
+            request_id,
+            seq(),
+            "evidence_gathered",
+            {
+                "planned": len(plan.queries),
+                "ran": {k: v for k, v in used.items() if v},
+                "items": len(gathered),
+                "unavailable": [i.error for i in gathered if i.status == "unavailable"],
+                # No silent caps: anything dropped is stated in the trace.
+                "skipped_over_cap": skipped,
+            },
+        )
+        return gathered
+
+    async def _assess_evidence(
+        self, request_id, question, check, items, budget, seq
+    ) -> EvidenceAssessment | None:
+        prompt = self.registry.get("evidence_assess")
+        provider = self.providers[self.check_provider]
+        model = self.cheap_models[self.check_provider]
+        bundle = "\n\n".join(item.as_context(i + 1) for i, item in enumerate(items))
+        claims = "\n".join(
+            f"- ({c.made_by}) {c.claim}" for c in check.checkable_claims
+        )
+        user = (
+            f"QUESTION:\n{question}\n\n"
+            f"CLAIMS TO ASSESS:\n{claims}\n\n"
+            f"EVIDENCE BUNDLE:\n{bundle}"
+        )
+        budget.spend("evidence_assess")
+        try:
+            resp = await self._generate(
+                request_id,
+                "evidence_assess",
+                provider,
+                model,
+                [
+                    {"role": "system", "content": prompt.text},
+                    {"role": "user", "content": user},
+                ],
+                schema=EvidenceAssessment,
+                max_tokens=8192,
+            )
+        except ProviderError as e:
+            await self._record_error(request_id, seq(), "evidence_assess", provider.name, e)
+            return None
+        await self._record_call(
+            request_id, seq(), "evidence_assess", resp, prompt.version_id,
+            output=resp.parsed.model_dump(),
+        )
+        return resp.parsed
+
+    async def _persist_evidence(self, request_id, items) -> None:
+        async with session_scope() as s:
+            for i, item in enumerate(items, start=1):
+                s.add(
+                    EvidenceItemRow(
+                        request_id=request_id,
+                        ordinal=i,
+                        kind=item.kind,
+                        query=item.query,
+                        status=item.status,
+                        source_url=item.source_url,
+                        title=item.title,
+                        snippet=item.snippet,
+                        error=item.error,
+                        latency_ms=item.latency_ms,
+                        raw=item.raw or None,
+                    )
+                )
+
+    async def _persist_assessment(self, request_id, assessment: EvidenceAssessment) -> None:
+        async with session_scope() as s:
+            for claim in assessment.claims:
+                s.add(
+                    ClaimAssessmentRow(
+                        request_id=request_id,
+                        claim=claim.claim,
+                        made_by=claim.made_by,
+                        verdict=claim.verdict,
+                        rationale=claim.rationale,
+                        citations=claim.citations or [],
+                    )
+                )
+
+    async def _mark_evidence_used(self, request_id) -> None:
+        async with session_scope() as s:
+            req = await s.get(Request, request_id)
+            if req is not None:
+                req.evidence_used = True
+
+    async def _set_evidence_override(self, request_id) -> None:
+        async with session_scope() as s:
+            req = await s.get(Request, request_id)
+            if req is not None:
+                req.evidence_override = True
 
     async def _critique_round(
         self, request_id, question, candidates, budget, seq
@@ -465,7 +729,7 @@ class CouncilEngine:
         return critiques or None
 
     async def _judge(
-        self, request_id, question, candidates, check, critiques, budget, seq
+        self, request_id, question, candidates, check, critiques, budget, seq, evidence=None
     ) -> JudgeVerdict | None:
         prompt = self.registry.get("judge")
         provider = self.providers[self.judge_provider]
@@ -476,10 +740,27 @@ class CouncilEngine:
             f"CANDIDATE B:\n{candidates['B'].content}",
             f"COMPARISON SUMMARY:\n{check.summary}",
         ]
-        if check.disagreement_type in ("factual", "both"):
-            # Evidence tools land in M4. Until then the judge must not settle
-            # a checkable factual dispute by plausibility (frozen rule:
-            # factual disagreement -> evidence, not debate or model voting).
+        if evidence is not None:
+            parts.append(evidence.render())
+            if evidence.contradicted:
+                parts.append(
+                    "BINDING: the evidence CONTRADICTS the claim(s) listed above. This holds "
+                    "even where both candidates asserted them — model agreement is not "
+                    "evidence. Your final answer must not assert a contradicted claim; state "
+                    "what the evidence shows instead. If both candidates depend on a "
+                    "contradicted claim, choose 'reject_both'."
+                )
+            if not evidence.decisive:
+                parts.append(
+                    "BINDING: the evidence gathered did NOT settle the disputed claims. You "
+                    "must not resolve them by plausibility or confidence. Your decision must "
+                    "be 'uncertain' and the final answer must present both positions "
+                    "honestly and say what would settle the question."
+                )
+        elif check.disagreement_type in ("factual", "both"):
+            # No evidence could be gathered (nothing checkable, planning
+            # failed, or tools unavailable): the judge must not settle a
+            # checkable factual dispute by plausibility.
             parts.append(
                 "NO EXTERNAL EVIDENCE IS AVAILABLE for this request. The "
                 "candidates disagree on checkable facts. You must NOT resolve "
@@ -527,11 +808,15 @@ class CouncilEngine:
 
     async def _verify_and_maybe_revise(
         self, request_id, question, result, candidates, critiques, budget, seq,
-        *, producer: str,
+        *, producer: str, evidence=None,
     ) -> dict:
         """Deep mode's audit: verifier on the opposite provider from whichever
         provider actually produced the final answer (judge OR synthesis);
-        at most one revision; verifier failure degrades, never blocks."""
+        at most one revision; verifier failure degrades, never blocks.
+
+        Evidence has precedence over the verifier's own verdict: a claim the
+        evidence contradicted, or an unsettled factual dispute, forces a
+        revision in code even if the verifier returned 'pass'."""
         prompt = self.registry.get("verifier")
         verifier_name = self._other_provider(producer)
         provider = self.providers[verifier_name]
@@ -547,8 +832,12 @@ class CouncilEngine:
         user = (
             f"QUESTION:\n{question}\n\n"
             f"FINAL ANSWER UNDER AUDIT:\n{result['final_answer']}\n\n"
-            f"SOURCE MATERIAL:\n\n" + "\n\n".join(source)
         )
+        if evidence is not None:
+            # Evidence first, deliberately: it takes precedence over the
+            # candidates' agreement when classifying claims.
+            user += f"{evidence.render()}\n\n"
+        user += "SOURCE MATERIAL:\n\n" + "\n\n".join(source)
         budget.spend("verifier")
         try:
             resp = await self._generate(
@@ -571,12 +860,45 @@ class CouncilEngine:
             request_id, seq(), "verifier", resp, prompt.version_id,
             output=report.model_dump(),
         )
+
+        # R2: evidence outranks the verifier. A pass verdict cannot stand over
+        # a claim the evidence contradicted, and cannot stand over a judge
+        # decision the engine already flagged as violating an evidence
+        # constraint. Enforced here in code, not left to the prompt.
+        forced_reasons: list[str] = list(result.get("force_revision_reasons") or [])
+        if evidence is not None and evidence.contradicted:
+            forced_reasons.append(
+                "The evidence contradicts: "
+                + "; ".join(c.claim for c in evidence.contradicted)
+                + ". The final answer must not assert these; state what the evidence shows"
+                + (f" — {evidence.assessment.correction}" if evidence.assessment.correction else "")
+                + "."
+            )
+        if forced_reasons and report.verdict == "pass":
+            await self._record_stage(
+                request_id,
+                seq(),
+                "evidence_supremacy_override",
+                {
+                    "rule": "evidence outranks a verifier pass",
+                    "verifier_verdict": "pass",
+                    "forced_verdict": "revise",
+                    "reasons": forced_reasons,
+                },
+            )
+            await self._set_evidence_override(request_id)
+            report = report.model_copy(
+                update={"verdict": "revise", "reasons": [*report.reasons, *forced_reasons]}
+            )
+        elif forced_reasons:
+            report = report.model_copy(update={"reasons": [*report.reasons, *forced_reasons]})
+
         if report.verdict == "pass":
             return result
 
         revised = await self._revise(
             request_id, question, result["final_answer"], report, candidates, budget, seq,
-            producer=producer,
+            producer=producer, evidence=evidence,
         )
         if revised is None:
             # Revision failed — ship the audited answer with the flags visible.
@@ -585,7 +907,7 @@ class CouncilEngine:
 
     async def _revise(
         self, request_id, question, final_answer, report: VerifierReport,
-        candidates, budget, seq, *, producer: str,
+        candidates, budget, seq, *, producer: str, evidence=None,
     ) -> RevisedAnswer | None:
         prompt = self.registry.get("revision")
         provider = self.providers[producer]
@@ -595,7 +917,9 @@ class CouncilEngine:
             f"CURRENT FINAL ANSWER:\n{final_answer}\n\n"
             f"VERIFIER REASONS FOR REVISION:\n"
             + "\n".join(f"- {r}" for r in report.reasons)
-            + "\n\nSOURCE MATERIAL:\n\n"
+            + "\n\n"
+            + (f"{evidence.render()}\n\n" if evidence is not None else "")
+            + "SOURCE MATERIAL:\n\n"
             f"CANDIDATE A:\n{candidates['A'].content}\n\n"
             f"CANDIDATE B:\n{candidates['B'].content}"
         )
@@ -772,6 +1096,20 @@ class CouncilEngine:
                 raise KeyError(request_id)
             stmt = select(Step).where(Step.request_id == request_id).order_by(Step.seq)
             steps = (await s.execute(stmt)).scalars().all()
+            ev_rows = (
+                await s.execute(
+                    select(EvidenceItemRow)
+                    .where(EvidenceItemRow.request_id == request_id)
+                    .order_by(EvidenceItemRow.ordinal)
+                )
+            ).scalars().all()
+            claim_rows = (
+                await s.execute(
+                    select(ClaimAssessmentRow).where(
+                        ClaimAssessmentRow.request_id == request_id
+                    )
+                )
+            ).scalars().all()
             return {
                 "id": req.id,
                 "question": req.question,
@@ -780,6 +1118,32 @@ class CouncilEngine:
                 "final_answer": req.final_answer,
                 "degraded": req.degraded,
                 "error": req.error,
+                "evidence_used": req.evidence_used,
+                "evidence_override": req.evidence_override,
+                "evidence": [
+                    {
+                        "ordinal": e.ordinal,
+                        "kind": e.kind,
+                        "query": e.query,
+                        "status": e.status,
+                        "source_url": e.source_url,
+                        "title": e.title,
+                        "snippet": e.snippet,
+                        "error": e.error,
+                        "latency_ms": e.latency_ms,
+                    }
+                    for e in ev_rows
+                ],
+                "claim_assessments": [
+                    {
+                        "claim": c.claim,
+                        "made_by": c.made_by,
+                        "verdict": c.verdict,
+                        "rationale": c.rationale,
+                        "citations": c.citations or [],
+                    }
+                    for c in claim_rows
+                ],
                 "totals": {
                     "input_tokens": req.total_input_tokens,
                     "output_tokens": req.total_output_tokens,
@@ -807,6 +1171,53 @@ class CouncilEngine:
                     for st in steps
                 ],
             }
+
+
+class EvidenceContext:
+    """The evidence bundle plus its per-claim verdicts, and the derived facts
+    the pipeline enforces in code rather than trusting to prompts."""
+
+    def __init__(self, items: list, assessment: EvidenceAssessment):
+        self.items = items
+        self.assessment = assessment
+
+    @property
+    def contradicted(self) -> list:
+        return [c for c in self.assessment.claims if c.verdict == "CONTRADICTED_BY_EVIDENCE"]
+
+    @property
+    def supported(self) -> list:
+        return [c for c in self.assessment.claims if c.verdict == "SUPPORTED_BY_EVIDENCE"]
+
+    @property
+    def insufficient(self) -> list:
+        return [c for c in self.assessment.claims if c.verdict == "INSUFFICIENT_EVIDENCE"]
+
+    @property
+    def decisive(self) -> bool:
+        """True when the evidence actually settled something."""
+        return bool(self.contradicted or self.supported)
+
+    def render(self) -> str:
+        """Evidence bundle + binding verdicts, as given to answer-producing
+        and verifying stages."""
+        bundle = "\n\n".join(item.as_context(i + 1) for i, item in enumerate(self.items))
+        verdicts = "\n".join(
+            f"- [{c.verdict}] {c.claim}"
+            + (f"\n    basis: {c.rationale}" if c.rationale else "")
+            + (f"\n    cites: {c.citations}" if c.citations else "")
+            for c in self.assessment.claims
+        )
+        parts = [
+            "EVIDENCE BUNDLE (retrieved sources and executed code):",
+            bundle or "(no items)",
+            "",
+            "EVIDENCE VERDICTS — these are binding and outrank both candidates:",
+            verdicts or "(no claims assessed)",
+        ]
+        if self.assessment.correction:
+            parts += ["", f"WHAT THE EVIDENCE ACTUALLY SHOWS: {self.assessment.correction}"]
+        return "\n".join(parts)
 
 
 class _Seq:

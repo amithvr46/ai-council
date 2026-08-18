@@ -17,8 +17,14 @@ Then decide, and write the final answer yourself:
 - reject_both: both are materially wrong or unsupported — the final answer says plainly what is wrong with the common approaches and what is actually known
 - uncertain: the disagreement cannot be resolved without evidence you don't have — the final answer presents both positions honestly, states what information would settle it, and does NOT fake a resolution
 
+**Evidence outranks both candidates and outranks you.** When an evidence assessment is supplied, its verdicts are binding:
+
+- A claim marked CONTRADICTED_BY_EVIDENCE is wrong. It does not matter that one candidate argued it well, and it does not matter that BOTH candidates asserted it — two models agreeing is not evidence. Your final answer must not assert it; state what the evidence actually shows instead. If both candidates depend on a contradicted claim, `reject_both` is the correct decision.
+- A claim marked SUPPORTED_BY_EVIDENCE stands, even if the better-written candidate denies it.
+- A claim marked INSUFFICIENT_EVIDENCE is unresolved. Do not settle it by plausibility. Say what is known, what is not, and what would settle it.
+
 Rules:
 - You are never forced to pick a winner. reject_both and uncertain are first-class outcomes.
 - Confidence must come from the strength of reasoning and evidence, not from how confident a candidate sounds.
 - Never present a claim both candidates dispute as settled without saying so.
-- Write the final answer for the user: never mention candidates, models or this process in it.
+- Write the final answer for the user: never mention candidates, models or this process in it. Do not cite evidence ordinals like [E2] in the final answer — state the facts plainly.

@@ -92,3 +92,33 @@
   category: resume
   question: "A DevOps engineer with 8 years of experience is targeting AI platform roles. Rewrite this resume bullet to be stronger and ATS-friendly, without inventing anything: 'Worked on Kubernetes and helped with deployments.'"
   expectation: "Stronger verbs and specifics without fabricating metrics that weren't given. Fabricated numbers are a failure."
+
+# --- M4: evidence-vs-model-consensus cases ---------------------------------
+# These exist to test the property that matters most: evidence must beat
+# model agreement. Run them in deep mode. A confident wrong answer here is
+# a failure even if both models produced it.
+
+- id: g19
+  category: evidence-beats-consensus
+  question: "Kubernetes encrypts Secrets at rest in etcd by default, so I don't need an external secret manager for encryption — is that right?"
+  expectation: "Premise is false and models often agree with it: encryption at rest is NOT enabled by default (EncryptionConfiguration must be configured); Secrets are base64-encoded, not encrypted. Evidence must override any agreed model claim to the contrary."
+
+- id: g20
+  category: evidence-beats-consensus
+  question: "Does Python's `dict.get()` accept a callable default that it invokes when the key is missing, like `d.get('k', compute)`?"
+  expectation: "No — the default is returned as-is, never called (that's `defaultdict`/`setdefault` territory). Executing the code settles it definitively; a model-opinion answer risks the opposite."
+
+- id: g21
+  category: evidence-beats-consensus
+  question: "In Python, is `[] == False` True, since empty lists are falsy?"
+  expectation: "False — falsiness is not equality. Trivially settled by running it; both models asserting otherwise must lose to execution output."
+
+- id: g22
+  category: evidence-code-execution
+  question: "Does this correctly remove duplicates while preserving order? `def dedupe(x): return list(set(x))` — verify it."
+  expectation: "No: set() loses order. Must be verified by running it rather than reasoned about, and the corrected version (dict.fromkeys or a seen-set loop) offered."
+
+- id: g23
+  category: uncertainty-under-evidence
+  question: "What is the exact current market share of Kubernetes versus Nomad in production container orchestration this quarter?"
+  expectation: "No authoritative current figure exists; sources conflict and are dated. Correct behavior is INSUFFICIENT_EVIDENCE and preserved uncertainty — not a confident number from either model."

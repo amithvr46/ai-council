@@ -52,6 +52,48 @@ class Synthesis(BaseModel):
     notes: str = Field(default="", description="Anything dropped or flagged during synthesis")
 
 
+class EvidenceQuery(BaseModel):
+    tool: Literal["web", "code"]
+    query: str = Field(
+        description="Search query for 'web'; complete runnable Python source for 'code'"
+    )
+    targets_claim: str = Field(description="Which checkable claim this is meant to settle")
+
+
+class EvidencePlan(BaseModel):
+    """What to look up / run in order to settle the disputed or checkable
+    claims. Empty when nothing is objectively checkable."""
+
+    queries: list[EvidenceQuery] = Field(default_factory=list)
+    reasoning: str = Field(default="", description="Why these checks settle the question")
+
+
+class ClaimVerdict(BaseModel):
+    claim: str
+    made_by: Literal["A", "B", "both"] = "both"
+    verdict: Literal[
+        "SUPPORTED_BY_EVIDENCE", "CONTRADICTED_BY_EVIDENCE", "INSUFFICIENT_EVIDENCE"
+    ]
+    rationale: str = Field(description="What in the evidence decides this, quoted or paraphrased")
+    citations: list[int] = Field(
+        default_factory=list, description="Ordinals of the [E<n>] evidence items relied on"
+    )
+
+
+class EvidenceAssessment(BaseModel):
+    """Claims judged strictly against retrieved evidence — never against
+    which model sounded more convincing."""
+
+    claims: list[ClaimVerdict] = Field(default_factory=list)
+    correction: str = Field(
+        default="",
+        description=(
+            "If the evidence contradicts a claim, what the evidence actually shows. "
+            "Empty when nothing is contradicted."
+        ),
+    )
+
+
 class CritiqueIssue(BaseModel):
     kind: Literal[
         "factual_error",
