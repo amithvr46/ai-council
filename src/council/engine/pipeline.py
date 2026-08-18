@@ -45,6 +45,7 @@ class CouncilEngine:
         check_provider: str = "openai",
         judge_provider: str = "anthropic",
         quick_mode_strategy: str = "alternate",
+        publish=None,  # optional callable(request_id, event_dict) for live progress
     ):
         self.providers = providers
         self.registry = registry
@@ -53,6 +54,11 @@ class CouncilEngine:
         self.check_provider = check_provider
         self.judge_provider = judge_provider
         self.quick_mode_strategy = quick_mode_strategy
+        self._publish = publish
+
+    def _emit(self, request_id: str, event: dict) -> None:
+        if self._publish is not None:
+            self._publish(request_id, event)
 
     def _other_provider(self, name: str) -> str:
         names = sorted(self.providers)
@@ -60,11 +66,19 @@ class CouncilEngine:
 
     # ------------------------------------------------------------------ run
 
-    async def run(self, question: str, mode: str) -> dict:
+    async def create(self, question: str, mode: str) -> str:
+        """Create the request row up front so callers can subscribe to its
+        event stream before execution starts (async API path)."""
+        BudgetTracker(mode)  # validate mode before persisting anything
+        return await self._create_request(question, mode)
+
+    async def run(self, question: str, mode: str, request_id: str | None = None) -> dict:
         started = time.monotonic()
         budget = BudgetTracker(mode)
 
-        request_id = await self._create_request(question, mode)
+        if request_id is None:
+            request_id = await self._create_request(question, mode)
+        self._emit(request_id, {"type": "started", "mode": mode})
         seq = _Seq()
 
         try:
@@ -524,6 +538,18 @@ class CouncilEngine:
             req.total_cost_usd += resp.cost_usd
             req.model_calls += 1
             req.total_api_attempts += resp.api_attempts
+        self._emit(
+            request_id,
+            {
+                "type": "stage",
+                "stage": stage,
+                "status": "ok",
+                "provider": resp.provider,
+                "model": resp.model,
+                "cost_usd": round(resp.cost_usd, 6),
+                "latency_ms": resp.latency_ms,
+            },
+        )
 
     async def _record_error(self, request_id, seq, stage, provider_name, error: Exception):
         async with session_scope() as s:
@@ -537,10 +563,15 @@ class CouncilEngine:
                     error=f"{type(error).__name__}: {error}",
                 )
             )
+        self._emit(
+            request_id,
+            {"type": "stage", "stage": stage, "status": "error", "provider": provider_name},
+        )
 
     async def _record_stage(self, request_id, seq, stage, output: dict | None):
         async with session_scope() as s:
             s.add(Step(request_id=request_id, seq=seq, stage=stage, output=output, status="ok"))
+        self._emit(request_id, {"type": "stage", "stage": stage, "status": "ok"})
 
     async def _finish(
         self, request_id, *, status="complete", final_answer=None, degraded=False,
@@ -553,6 +584,11 @@ class CouncilEngine:
             req.degraded = req.degraded or degraded
             req.error = error
             req.latency_ms = int((time.monotonic() - started) * 1000)
+            was_degraded = req.degraded
+        self._emit(
+            request_id,
+            {"type": "done", "status": status, "degraded": was_degraded, "error": error},
+        )
 
     async def get_request(self, request_id: str) -> dict:
         async with session_scope() as s:

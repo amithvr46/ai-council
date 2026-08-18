@@ -27,7 +27,9 @@ Every model call is persisted to Postgres (`requests` + `steps`) with prompt ver
 
 **Milestone 2 (complete):** blinded judge with dimension-level verdicts (never forced to pick a winner), one cross-critique round for reasoning disagreements in deep mode, verifier on the opposite provider auditing final-answer claims as SUPPORTED / INFERRED / UNSUPPORTED / CONTRADICTED, at most one revision. Live-verified: the verifier caught a deliberately planted fake claim and demanded revision.
 
-**Milestone 3 (next):** Next.js UI with SSE stage streaming. **Milestone 4:** evidence tools (web retrieval + sandboxed code execution).
+**Milestone 3 (complete):** Next.js web UI — ask page with live stage streaming (SSE), expandable trace (candidates, agreement check, judge dimension verdicts, verifier claim audit), 1–5 rating, history browser and live cost stats. New API: `POST /ask/async`, `GET /requests/{id}/stream` (SSE), `GET /requests` (paginated), `GET /stats`.
+
+**Milestone 4 (next):** evidence tools (web retrieval + sandboxed code execution).
 
 ```
 council mode on disagreement:   candidates -> check -> blinded judge -> final
@@ -57,6 +59,10 @@ docker compose up -d        # Postgres
 # POST /ask {"question": "...", "mode": "council"}
 # GET  /requests/{id}          — full execution trace
 # POST /requests/{id}/rating   — 1-5, feeds the model-performance learning layer
+
+# Web UI (needs the API running; Node 18+)
+cd frontend && npm install && npm run dev
+# open http://localhost:3000
 ```
 
 ## Evals

@@ -1,6 +1,7 @@
 """Wire settings + providers + prompts into a ready CouncilEngine."""
 
 from council.config import get_settings
+from council.engine.events import bus
 from council.engine.pipeline import CouncilEngine
 from council.engine.prompts import default_registry
 from council.providers.anthropic_provider import AnthropicProvider
@@ -34,4 +35,5 @@ def build_engine() -> CouncilEngine:
         check_provider=s.check_provider,
         judge_provider=s.judge_provider,
         quick_mode_strategy=s.quick_mode_strategy,
+        publish=bus.publish,
     )

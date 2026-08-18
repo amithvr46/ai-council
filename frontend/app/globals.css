@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-zinc-950 text-zinc-100 antialiased;
+}
+
+.prose-answer {
+  @apply text-[15px] leading-relaxed;
+}
+.prose-answer h1, .prose-answer h2, .prose-answer h3 {
+  @apply font-semibold mt-5 mb-2 text-zinc-100;
+}
+.prose-answer h1 { @apply text-lg; }
+.prose-answer h2 { @apply text-base; }
+.prose-answer p { @apply my-2.5; }
+.prose-answer ul, .prose-answer ol { @apply my-2.5 pl-5 space-y-1; }
+.prose-answer ul { @apply list-disc; }
+.prose-answer ol { @apply list-decimal; }
+.prose-answer code {
+  @apply bg-zinc-800 text-emerald-300 rounded px-1 py-0.5 text-[13px];
+}
+.prose-answer pre {
+  @apply bg-zinc-900 border border-zinc-800 rounded-lg p-3 my-3 overflow-x-auto;
+}
+.prose-answer pre code { @apply bg-transparent p-0 text-zinc-200; }
+.prose-answer a { @apply text-sky-400 underline; }
+.prose-answer blockquote { @apply border-l-2 border-zinc-700 pl-3 text-zinc-400; }
+.prose-answer table { @apply my-3 text-sm; }
+.prose-answer th, .prose-answer td { @apply border border-zinc-800 px-2 py-1; }

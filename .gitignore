@@ -8,3 +8,6 @@ dist/
 *.egg-info/
 evals/results/
 .DS_Store
+node_modules/
+.next/
+next-env.d.ts
