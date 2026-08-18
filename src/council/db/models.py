@@ -25,10 +25,25 @@ class Base(DeclarativeBase):
     pass
 
 
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    title: Mapped[str] = mapped_column(String(120), default="New chat")
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    requests: Mapped[list["Request"]] = relationship(back_populates="conversation")
+
+
 class Request(Base):
     __tablename__ = "requests"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    conversation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("conversations.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     question: Mapped[str] = mapped_column(Text)
     mode: Mapped[str] = mapped_column(String(16))  # quick | council | deep
@@ -50,6 +65,7 @@ class Request(Base):
     steps: Mapped[list["Step"]] = relationship(
         back_populates="request", order_by="Step.seq", cascade="all, delete-orphan"
     )
+    conversation: Mapped[Conversation | None] = relationship(back_populates="requests")
 
 
 class Step(Base):

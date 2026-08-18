@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from council.db.models import Base, Request
+from council.db.models import Base, Conversation, Request
 from council.db.session import ensure_engine, get_engine, session_scope
 from council.engine.budget import MODE_BUDGETS
 from council.engine.events import bus
@@ -43,30 +43,170 @@ app.add_middleware(
 class AskBody(BaseModel):
     question: str = Field(min_length=1)
     mode: str = Field(default="council", pattern="^(quick|council|deep)$")
+    conversation_id: str | None = None
+
+
+MAX_HISTORY_TURNS = 6
+MAX_HISTORY_CHARS = 4000  # per message; keeps follow-up context costs sane
+
+
+async def _conversation_history(conversation_id: str) -> list[dict[str, str]]:
+    """Recent completed turns of a conversation as chat messages."""
+    async with session_scope() as s:
+        rows = (
+            (
+                await s.execute(
+                    select(Request)
+                    .where(
+                        Request.conversation_id == conversation_id,
+                        Request.status == "complete",
+                        Request.final_answer.is_not(None),
+                    )
+                    .order_by(Request.created_at.desc())
+                    .limit(MAX_HISTORY_TURNS)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    history: list[dict[str, str]] = []
+    for r in reversed(rows):  # oldest first
+        history.append({"role": "user", "content": r.question[:MAX_HISTORY_CHARS]})
+        history.append({"role": "assistant", "content": r.final_answer[:MAX_HISTORY_CHARS]})
+    return history
+
+
+async def _ensure_conversation(body: AskBody) -> str:
+    from datetime import datetime as _dt
+
+    async with session_scope() as s:
+        if body.conversation_id:
+            conv = await s.get(Conversation, body.conversation_id)
+            if conv is None:
+                raise HTTPException(status_code=404, detail="conversation not found")
+            conv.updated_at = _dt.now(UTC)
+            return conv.id
+        title = body.question.strip().splitlines()[0][:80]
+        conv = Conversation(title=title)
+        s.add(conv)
+        await s.flush()
+        return conv.id
 
 
 @app.post("/ask")
 async def ask(body: AskBody):
     """Synchronous: runs the full pipeline, returns the completed trace."""
-    return await engine.run(body.question, body.mode)
+    history = await _conversation_history(body.conversation_id) if body.conversation_id else []
+    return await engine.run(body.question, body.mode, history=history)
 
 
 @app.post("/ask/async")
 async def ask_async(body: AskBody):
-    """Returns the request id immediately; subscribe to /requests/{id}/stream
-    for live stage events while the pipeline runs in the background."""
-    request_id = await engine.create(body.question, body.mode)
+    """Returns the request + conversation ids immediately; subscribe to
+    /requests/{id}/stream for live stage events."""
+    conversation_id = await _ensure_conversation(body)
+    history = await _conversation_history(conversation_id)
+    request_id = await engine.create(body.question, body.mode, conversation_id)
 
     async def _run():
         try:
-            await engine.run(body.question, body.mode, request_id=request_id)
+            await engine.run(body.question, body.mode, request_id=request_id, history=history)
         except Exception:
             pass  # failure state is persisted + emitted by the engine itself
 
     task = asyncio.create_task(_run())
     _background.add(task)
     task.add_done_callback(_background.discard)
-    return {"id": request_id, "status": "running"}
+    return {"id": request_id, "conversation_id": conversation_id, "status": "running"}
+
+
+# ----------------------------------------------------------- conversations
+
+
+class ConversationPatch(BaseModel):
+    pinned: bool | None = None
+    title: str | None = Field(default=None, max_length=120)
+
+
+@app.get("/conversations")
+async def list_conversations(limit: int = 30):
+    limit = max(1, min(limit, 100))
+    async with session_scope() as s:
+        rows = (
+            (
+                await s.execute(
+                    select(Conversation)
+                    .order_by(Conversation.pinned.desc(), Conversation.updated_at.desc())
+                    .limit(limit)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return {
+            "items": [
+                {
+                    "id": c.id,
+                    "title": c.title,
+                    "pinned": c.pinned,
+                    "updated_at": c.updated_at.isoformat(),
+                }
+                for c in rows
+            ]
+        }
+
+
+@app.get("/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str):
+    async with session_scope() as s:
+        conv = await s.get(Conversation, conversation_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        rows = (
+            (
+                await s.execute(
+                    select(Request)
+                    .where(Request.conversation_id == conversation_id)
+                    .order_by(Request.created_at.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return {
+            "id": conv.id,
+            "title": conv.title,
+            "pinned": conv.pinned,
+            "requests": [
+                {
+                    "id": r.id,
+                    "question": r.question,
+                    "mode": r.mode,
+                    "status": r.status,
+                    "degraded": r.degraded,
+                    "final_answer": r.final_answer,
+                    "cost_usd": round(r.total_cost_usd, 6),
+                    "latency_ms": r.latency_ms,
+                    "model_calls": r.model_calls,
+                    "user_rating": r.user_rating,
+                    "created_at": r.created_at.isoformat(),
+                }
+                for r in rows
+            ],
+        }
+
+
+@app.patch("/conversations/{conversation_id}")
+async def patch_conversation(conversation_id: str, body: ConversationPatch):
+    async with session_scope() as s:
+        conv = await s.get(Conversation, conversation_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="conversation not found")
+        if body.pinned is not None:
+            conv.pinned = body.pinned
+        if body.title is not None:
+            conv.title = body.title
+    return {"ok": True}
 
 
 @app.get("/requests/{request_id}/stream")

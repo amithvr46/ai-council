@@ -48,14 +48,39 @@ export type Trace = {
   steps: Step[];
 };
 
-export async function askAsync(question: string, mode: string): Promise<string> {
+export async function askAsync(
+  question: string,
+  mode: string,
+  conversationId?: string | null,
+): Promise<{ id: string; conversation_id: string }> {
   const r = await fetch(`${API}/ask/async`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, mode }),
+    body: JSON.stringify({ question, mode, conversation_id: conversationId ?? null }),
   });
   if (!r.ok) throw new Error(`ask failed: ${r.status}`);
-  return (await r.json()).id;
+  return r.json();
+}
+
+export type ConversationRequest = {
+  id: string;
+  question: string;
+  mode: string;
+  status: string;
+  degraded: boolean;
+  final_answer: string | null;
+  cost_usd: number;
+  latency_ms: number | null;
+  model_calls: number;
+  user_rating: number | null;
+};
+
+export async function getConversation(
+  id: string,
+): Promise<{ id: string; title: string; pinned: boolean; requests: ConversationRequest[] }> {
+  const r = await fetch(`${API}/conversations/${id}`);
+  if (!r.ok) throw new Error(`conversation failed: ${r.status}`);
+  return r.json();
 }
 
 export async function getTrace(id: string): Promise<Trace> {

@@ -66,27 +66,39 @@ class CouncilEngine:
 
     # ------------------------------------------------------------------ run
 
-    async def create(self, question: str, mode: str) -> str:
+    async def create(
+        self, question: str, mode: str, conversation_id: str | None = None
+    ) -> str:
         """Create the request row up front so callers can subscribe to its
         event stream before execution starts (async API path)."""
         BudgetTracker(mode)  # validate mode before persisting anything
-        return await self._create_request(question, mode)
+        return await self._create_request(question, mode, conversation_id)
 
-    async def run(self, question: str, mode: str, request_id: str | None = None) -> dict:
+    async def run(
+        self,
+        question: str,
+        mode: str,
+        request_id: str | None = None,
+        history: list[dict[str, str]] | None = None,
+    ) -> dict:
+        """history: optional prior turns of the conversation as chat messages
+        ([{role: user|assistant, content: ...}]); candidates see them so
+        follow-up questions work. Later stages audit only the current turn."""
         started = time.monotonic()
         budget = BudgetTracker(mode)
 
         if request_id is None:
-            request_id = await self._create_request(question, mode)
+            request_id = await self._create_request(question, mode, None)
         self._emit(request_id, {"type": "started", "mode": mode})
         seq = _Seq()
+        history = history or []
 
         try:
             if mode == "quick":
-                final = await self._run_quick(request_id, question, budget, seq)
+                final = await self._run_quick(request_id, question, budget, seq, history)
             else:
                 final = await self._run_council(
-                    request_id, question, budget, seq, deep=(mode == "deep")
+                    request_id, question, budget, seq, deep=(mode == "deep"), history=history
                 )
         except Exception as e:
             await self._finish(request_id, status="failed", error=str(e), started=started)
@@ -97,7 +109,9 @@ class CouncilEngine:
 
     # ---------------------------------------------------------------- quick
 
-    async def _run_quick(self, request_id: str, question: str, budget, seq) -> dict:
+    async def _run_quick(
+        self, request_id: str, question: str, budget, seq, history: list | None = None
+    ) -> dict:
         """One model answers; if it fails, fail over to the other provider
         once, visibly (degraded=True). Same policy as council: a healthy
         provider means the user gets an answer."""
@@ -105,6 +119,7 @@ class CouncilEngine:
         prompt = self.registry.get("candidate")
         messages = [
             {"role": "system", "content": prompt.text},
+            *(history or []),
             {"role": "user", "content": question},
         ]
 
@@ -144,7 +159,13 @@ class CouncilEngine:
     # -------------------------------------------------------------- council
 
     async def _run_council(
-        self, request_id: str, question: str, budget, seq, deep: bool = False
+        self,
+        request_id: str,
+        question: str,
+        budget,
+        seq,
+        deep: bool = False,
+        history: list | None = None,
     ) -> dict:
         prompt = self.registry.get("candidate")
         # Randomize which provider is Candidate A — blinding starts at birth,
@@ -161,6 +182,7 @@ class CouncilEngine:
             return await p.generate(
                 [
                     {"role": "system", "content": prompt.text},
+                    *(history or []),
                     {"role": "user", "content": question},
                 ],
                 model=self.flagship_models[name],
@@ -504,9 +526,13 @@ class CouncilEngine:
 
     # ------------------------------------------------------------ persistence
 
-    async def _create_request(self, question: str, mode: str) -> str:
+    async def _create_request(
+        self, question: str, mode: str, conversation_id: str | None = None
+    ) -> str:
         async with session_scope() as s:
-            req = Request(question=question, mode=mode, status="routed")
+            req = Request(
+                question=question, mode=mode, status="routed", conversation_id=conversation_id
+            )
             s.add(req)
             await s.flush()
             return req.id
