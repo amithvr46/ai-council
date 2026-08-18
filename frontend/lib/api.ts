@@ -58,7 +58,13 @@ export async function askAsync(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ question, mode, conversation_id: conversationId ?? null }),
   });
-  if (!r.ok) throw new Error(`ask failed: ${r.status}`);
+  if (!r.ok) {
+    let detail = "";
+    try {
+      detail = (await r.json()).detail ?? "";
+    } catch {}
+    throw new Error(`ask failed (${r.status})${detail ? `: ${detail}` : ""}`);
+  }
   return r.json();
 }
 

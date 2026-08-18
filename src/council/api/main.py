@@ -40,6 +40,19 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(Exception)
+async def unhandled_error(request, exc):
+    """Return JSON 500s (with CORS headers) instead of bare errors — the
+    browser otherwise reports an opaque 'Failed to fetch'."""
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc}"},
+        headers={"Access-Control-Allow-Origin": "http://localhost:3000"},
+    )
+
+
 class AskBody(BaseModel):
     question: str = Field(min_length=1)
     mode: str = Field(default="council", pattern="^(quick|council|deep)$")
