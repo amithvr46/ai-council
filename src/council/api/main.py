@@ -151,7 +151,11 @@ async def cancel(request_id: str):
     task = _running.get(request_id)
     if task is None:
         raise HTTPException(status_code=404, detail="no running request with that id")
-    task.cancel()
+    # Task.cancel() returns False when the task already finished — the done
+    # callback may not have cleared _running yet. Report that honestly
+    # instead of claiming a cancellation that never happened.
+    if not task.cancel():
+        raise HTTPException(status_code=409, detail="request already finished")
     return {"ok": True, "id": request_id}
 
 

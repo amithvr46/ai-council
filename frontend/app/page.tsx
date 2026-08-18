@@ -251,8 +251,11 @@ export default function AskPage() {
                 )}
 
                 {e.live && !e.answer && (
-                  <div className="rounded-2xl rounded-bl-sm border border-zinc-800 bg-zinc-900/40 px-5 py-4">
-                    <div className="prose-answer">
+                  <div className="rounded-2xl rounded-bl-sm border border-dashed border-zinc-700 bg-zinc-900/30 px-5 py-4">
+                    <div className="mb-2 text-[11px] uppercase tracking-wide text-zinc-500">
+                      drafting — not yet verified
+                    </div>
+                    <div className="prose-answer text-zinc-300">
                       <ReactMarkdown>{e.live.text}</ReactMarkdown>
                     </div>
                     <span className="mt-1 inline-block h-4 w-1.5 animate-pulse bg-sky-400 align-text-bottom" />

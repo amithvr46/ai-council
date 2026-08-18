@@ -57,10 +57,38 @@ class CouncilEngine:
         self.quick_mode_strategy = quick_mode_strategy
         self._publish = publish
         self._cancel_started: dict[str, float] = {}
+        # Provider calls that have been initiated but not yet returned. If a
+        # request is cancelled mid-flight these are persisted as interrupted
+        # steps, so the trace never under-reports initiated API attempts.
+        self._inflight: dict[str, list[dict]] = {}
 
     def _emit(self, request_id: str, event: dict) -> None:
         if self._publish is not None:
             self._publish(request_id, event)
+
+    async def _generate(
+        self, request_id: str, stage: str, provider: ModelProvider, model: str, messages, **kwargs
+    ) -> ModelResponse:
+        """Every provider call goes through here so an initiated attempt is
+        visible even if the request is cancelled before the call returns."""
+        record = {"stage": stage, "provider": provider.name, "model": model}
+        self._inflight.setdefault(request_id, []).append(record)
+        try:
+            resp = await provider.generate(messages, model=model, **kwargs)
+        except asyncio.CancelledError:
+            raise  # leave the record: mark_cancelled() persists it
+        except BaseException:
+            self._drop_inflight(request_id, record)
+            raise
+        self._drop_inflight(request_id, record)
+        return resp
+
+    def _drop_inflight(self, request_id: str, record: dict) -> None:
+        records = self._inflight.get(request_id)
+        if records and record in records:
+            records.remove(record)
+        if records is not None and not records:
+            self._inflight.pop(request_id, None)
 
     def _delta_cb(self, request_id: str, stage: str, *, extract_field: bool = False):
         """Streaming callback for answer-producing stages: publishes live
@@ -150,8 +178,13 @@ class CouncilEngine:
         budget.spend("candidate")
         cb = self._delta_cb(request_id, "candidate_a")
         try:
-            resp = await primary.generate(
-                messages, model=self.flagship_models[primary.name], on_delta=cb
+            resp = await self._generate(
+                request_id,
+                "candidate_a",
+                primary,
+                self.flagship_models[primary.name],
+                messages,
+                on_delta=cb,
             )
             if cb:
                 cb.flush()
@@ -161,8 +194,13 @@ class CouncilEngine:
             fallback = self.providers[fallback_name]
             budget.spend("candidate_fallback")
             cb2 = self._delta_cb(request_id, "candidate_fallback")
-            resp = await fallback.generate(
-                messages, model=self.flagship_models[fallback_name], on_delta=cb2
+            resp = await self._generate(
+                request_id,
+                "candidate_fallback",
+                fallback,
+                self.flagship_models[fallback_name],
+                messages,
+                on_delta=cb2,
             )  # both providers failing fails the request — recorded by run()
             if cb2:
                 cb2.flush()
@@ -211,13 +249,16 @@ class CouncilEngine:
 
         async def one(name: str) -> ModelResponse:
             p = self.providers[name]
-            return await p.generate(
+            return await self._generate(
+                request_id,
+                f"candidate_{label_by_provider[name].lower()}",
+                p,
+                self.flagship_models[name],
                 [
                     {"role": "system", "content": prompt.text},
                     *(history or []),
                     {"role": "user", "content": question},
                 ],
-                model=self.flagship_models[name],
             )
 
         results = await asyncio.gather(*(one(n) for n in names), return_exceptions=True)
@@ -310,12 +351,15 @@ class CouncilEngine:
         )
         budget.spend("combined_check")
         try:
-            resp = await provider.generate(
+            resp = await self._generate(
+                request_id,
+                "combined_check",
+                provider,
+                model,
                 [
                     {"role": "system", "content": prompt.text},
                     {"role": "user", "content": user},
                 ],
-                model=model,
                 schema=CombinedCheck,
             )
         except ProviderError as e:
@@ -342,12 +386,15 @@ class CouncilEngine:
         budget.spend("synthesis")
         cb = self._delta_cb(request_id, "synthesis", extract_field=True)
         try:
-            resp = await provider.generate(
+            resp = await self._generate(
+                request_id,
+                "synthesis",
+                provider,
+                model,
                 [
                     {"role": "system", "content": prompt.text},
                     {"role": "user", "content": user},
                 ],
-                model=model,
                 schema=Synthesis,
                 on_delta=cb,
             )
@@ -381,12 +428,15 @@ class CouncilEngine:
                 f"THE ANSWER YOU ARE REVIEWING:\n{reviewed.content}\n\n"
                 f"YOUR OWN ANSWER (context):\n{candidates[other_label].content}"
             )
-            return await reviewer.generate(
+            return await self._generate(
+                request_id,
+                f"critique_of_{label.lower()}",
+                reviewer,
+                self.flagship_models[reviewer_name],
                 [
                     {"role": "system", "content": prompt.text},
                     {"role": "user", "content": user},
                 ],
-                model=self.flagship_models[reviewer_name],
                 schema=Critique,
             )
 
@@ -450,12 +500,15 @@ class CouncilEngine:
         budget.spend("judge")
         cb = self._delta_cb(request_id, "judge", extract_field=True)
         try:
-            resp = await provider.generate(
+            resp = await self._generate(
+                request_id,
+                "judge",
+                provider,
+                model,
                 [
                     {"role": "system", "content": prompt.text},
                     {"role": "user", "content": "\n\n".join(parts)},
                 ],
-                model=model,
                 schema=JudgeVerdict,
                 max_tokens=8192,
                 on_delta=cb,
@@ -498,12 +551,15 @@ class CouncilEngine:
         )
         budget.spend("verifier")
         try:
-            resp = await provider.generate(
+            resp = await self._generate(
+                request_id,
+                "verifier",
+                provider,
+                model,
                 [
                     {"role": "system", "content": prompt.text},
                     {"role": "user", "content": user},
                 ],
-                model=model,
                 schema=VerifierReport,
                 max_tokens=8192,
             )
@@ -546,12 +602,15 @@ class CouncilEngine:
         budget.spend("revision")
         cb = self._delta_cb(request_id, "revision", extract_field=True)
         try:
-            resp = await provider.generate(
+            resp = await self._generate(
+                request_id,
+                "revision",
+                provider,
+                model,
                 [
                     {"role": "system", "content": prompt.text},
                     {"role": "user", "content": user},
                 ],
-                model=model,
                 schema=RevisedAnswer,
                 max_tokens=8192,
                 on_delta=cb,
@@ -662,12 +721,41 @@ class CouncilEngine:
 
     async def mark_cancelled(self, request_id: str) -> None:
         """Record a user-cancelled request. Whatever stages completed before
-        the stop are already persisted (and billed); nothing further runs."""
+        the stop are already persisted (and billed); nothing further runs.
+
+        Provider calls that were in flight when the stop landed are persisted
+        as 'interrupted' steps: the provider may already have accepted (and
+        billed) them, and their token usage is unknowable after a hard
+        cancel, so they are counted as initiated API attempts with unknown
+        cost rather than omitted or invented."""
         started = self._cancel_started.pop(request_id, None)
+        interrupted = self._inflight.pop(request_id, [])
         async with session_scope() as s:
             req = await s.get(Request, request_id)
             if req is None or req.status in ("complete", "failed"):
                 return
+            next_seq = (
+                await s.execute(
+                    select(func.coalesce(func.max(Step.seq), 0)).where(
+                        Step.request_id == request_id
+                    )
+                )
+            ).scalar_one() + 1
+            for record in interrupted:
+                s.add(
+                    Step(
+                        request_id=request_id,
+                        seq=next_seq,
+                        stage=record["stage"],
+                        provider=record["provider"],
+                        model=record["model"],
+                        status="interrupted",
+                        error="cancelled mid-call; usage unknown, may have been billed",
+                        api_attempts=1,
+                    )
+                )
+                next_seq += 1
+            req.total_api_attempts += len(interrupted)
             req.status = "cancelled"
             req.error = "cancelled by user"
             if started is not None:

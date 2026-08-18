@@ -47,6 +47,64 @@ def test_extractor_stops_at_close_quote():
     assert _feed_all(FieldStreamExtractor(), raw) == "done"
 
 
+# --- surrogate pairs (GPT streaming review #1) -------------------------------
+
+
+def test_extractor_combines_surrogate_pair_emoji():
+    # 😀 is U+1F600, encoded in JSON as the pair 😀
+    raw = '{"final_answer": "ship it \\ud83d\\ude00 now"}'
+    out = _feed_all(FieldStreamExtractor(), raw)
+    assert out == "ship it 😀 now"
+    assert len(out) == len("ship it 😀 now")
+    out.encode("utf-8")  # must be encodable for SSE
+
+
+def test_extractor_surrogate_pair_split_across_every_boundary():
+    raw = '{"final_answer": "a\\ud83d\\ude00b"}'
+    for size in range(1, len(raw) + 1):
+        assert _feed_all(FieldStreamExtractor(), raw, size) == "a😀b"
+
+
+def test_extractor_multiple_non_bmp_characters():
+    raw = '{"final_answer": "\\ud83d\\ude80 \\ud83c\\udf89 \\ud83d\\udc4d"}'
+    out = _feed_all(FieldStreamExtractor(), raw, 2)
+    assert out == "🚀 🎉 👍"
+    out.encode("utf-8")
+
+
+def test_extractor_lone_high_surrogate_does_not_break_encoding():
+    raw = '{"final_answer": "bad \\ud83d end"}'
+    out = _feed_all(FieldStreamExtractor(), raw)
+    assert out == "bad � end"
+    out.encode("utf-8")  # would raise if a bare surrogate leaked
+
+
+def test_extractor_lone_low_surrogate_replaced():
+    raw = '{"final_answer": "x\\ude00y"}'
+    out = _feed_all(FieldStreamExtractor(), raw)
+    assert out == "x�y"
+    out.encode("utf-8")
+
+
+def test_extractor_high_surrogate_at_end_of_string():
+    raw = '{"final_answer": "trailing \\ud83d"}'
+    out = _feed_all(FieldStreamExtractor(), raw)
+    assert out == "trailing �"
+    out.encode("utf-8")
+
+
+def test_extractor_bmp_escape_still_works_after_surrogate_logic():
+    raw = '{"final_answer": "caf\\u00e9 \\u263a"}'
+    assert _feed_all(FieldStreamExtractor(), raw) == "café ☺"
+
+
+def test_extractor_mixed_escapes_and_emoji():
+    raw = '{"final_answer": "line\\n\\ud83d\\ude00\\t\\"q\\" \\\\ done"}'
+    out = _feed_all(FieldStreamExtractor(), raw, 3)
+    assert out == 'line\n😀\t"q" \\ done'
+    out.encode("utf-8")
+
+
 def test_throttle_batches_and_flushes():
     got = []
     t = DeltaThrottle(got.append, min_chars=10)
