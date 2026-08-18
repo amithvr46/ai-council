@@ -21,6 +21,7 @@ from sqlalchemy import func, select
 
 from council.db.models import ClaimAssessmentRow, EvidenceItemRow, Request, Step
 from council.db.session import session_scope
+from council.engine.assessor_guards import blind_claims, sanitize
 from council.engine.budget import BudgetTracker
 from council.engine.prompts import PromptRegistry
 from council.engine.schemas import (
@@ -597,9 +598,9 @@ class CouncilEngine:
         provider = self.providers[self.check_provider]
         model = self.cheap_models[self.check_provider]
         bundle = "\n\n".join(item.as_context(i + 1) for i, item in enumerate(items))
-        claims = "\n".join(
-            f"- ({c.made_by}) {c.claim}" for c in check.checkable_claims
-        )
+        # Blinded: the assessor never learns which model made a claim, or how
+        # many did. Consensus must not be able to leak in as a signal.
+        claims = "\n".join(f"- {c}" for c in blind_claims(check.checkable_claims))
         user = (
             f"QUESTION:\n{question}\n\n"
             f"CLAIMS TO ASSESS:\n{claims}\n\n"
@@ -622,11 +623,28 @@ class CouncilEngine:
         except ProviderError as e:
             await self._record_error(request_id, seq(), "evidence_assess", provider.name, e)
             return None
+        raw: EvidenceAssessment = resp.parsed
+        # Mechanical guardrails before anything downstream trusts a verdict.
+        assessment, guards = sanitize(raw, items)
+        # Re-attach attribution the assessor was blinded to, by claim text.
+        attribution = {c.claim: c.made_by for c in check.checkable_claims}
+        assessment = assessment.model_copy(
+            update={
+                "claims": [
+                    c.model_copy(update={"made_by": attribution.get(c.claim, "both")})
+                    for c in assessment.claims
+                ]
+            }
+        )
         await self._record_call(
             request_id, seq(), "evidence_assess", resp, prompt.version_id,
-            output=resp.parsed.model_dump(),
+            output={**assessment.model_dump(), "guards": guards.as_dict()},
         )
-        return resp.parsed
+        if not guards.clean:
+            await self._record_stage(
+                request_id, seq(), "assessor_guard_corrections", guards.as_dict()
+            )
+        return assessment
 
     async def _persist_evidence(self, request_id, items) -> None:
         async with session_scope() as s:
