@@ -2,7 +2,7 @@ import json
 import time
 
 from anthropic import APIError, APITimeoutError, AsyncAnthropic, RateLimitError
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from council.providers.base import (
     MalformedOutput,
@@ -11,6 +11,7 @@ from council.providers.base import (
     ProviderError,
     ProviderRateLimited,
     ProviderTimeout,
+    validate_payload,
 )
 
 
@@ -167,16 +168,5 @@ class AnthropicProvider(ModelProvider):
 
 
 def _validate_payload(data, schema: type[BaseModel]):
-    """Validate, unwrapping the intermittent single-key envelope some models
-    emit ({'parameters': {...}} / {'input': {...}})."""
-    candidates = [data]
-    if isinstance(data, dict) and len(data) == 1:
-        inner = next(iter(data.values()))
-        if isinstance(inner, dict):
-            candidates.append(inner)
-    for candidate in candidates:
-        try:
-            return schema.model_validate(candidate)
-        except ValidationError:
-            continue
-    return None
+    """Validate, unwrapping the envelope quirks documented in providers.base."""
+    return validate_payload(data, schema)

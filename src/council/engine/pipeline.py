@@ -315,19 +315,30 @@ class CouncilEngine:
                 request_id, question, candidates, check, budget, seq
             )
 
-        # R4: when evidence contradicts a claim BOTH candidates asserted,
-        # agreement is no longer a shortcut. Escalate to the judge, which can
-        # reject both — synthesis would only launder the shared error.
+        # R4: on the agreement path, any evidence-contradicted claim disables
+        # the synthesis shortcut and escalates to the judge, which can reject
+        # both. Synthesis merges candidates; it would launder the error.
+        # A claim both candidates asserted is the headline case, but a claim
+        # from one candidate that the other did not dispute is contaminating
+        # the same shared answer, so both escalate.
         agreement_path = check.agreement in ("agree", "partial")
         if agreement_path and evidence and evidence.contradicted:
             agreement_path = False
+            shared = [c for c in evidence.contradicted if c.made_by == "both"]
             await self._record_stage(
                 request_id,
                 seq(),
                 "evidence_override",
                 {
-                    "reason": "evidence contradicts a claim both candidates asserted",
-                    "contradicted_claims": [c.claim for c in evidence.contradicted],
+                    "reason": (
+                        "evidence contradicts a claim BOTH candidates asserted"
+                        if shared
+                        else "evidence contradicts a claim on the agreement path"
+                    ),
+                    "contradicted_claims": [
+                        {"claim": c.claim, "asserted_by": c.made_by} for c in evidence.contradicted
+                    ],
+                    "asserted_by_both": [c.claim for c in shared],
                     "escalated_to": "judge",
                 },
             )
@@ -488,10 +499,32 @@ class CouncilEngine:
         silent absence — so uncertainty survives to the final answer."""
         plan = await self._plan_evidence(request_id, question, candidates, check, budget, seq)
         if plan is None or not plan.queries:
+            # Checkable claims existed but nothing was planned. Record the gap
+            # explicitly — silence here would look identical to "verified".
+            await self._record_stage(
+                request_id,
+                seq(),
+                "evidence_not_gathered",
+                {
+                    "checkable_claims": len(check.checkable_claims),
+                    "reason": "planning failed" if plan is None else "planner returned no queries",
+                    "consequence": "claims remain unverified; uncertainty must be preserved",
+                },
+            )
             return None
 
         items = await self._run_evidence_tools(request_id, plan, seq)
         if not items:
+            await self._record_stage(
+                request_id,
+                seq(),
+                "evidence_not_gathered",
+                {
+                    "checkable_claims": len(check.checkable_claims),
+                    "reason": "no evidence items returned by any tool",
+                    "consequence": "claims remain unverified; uncertainty must be preserved",
+                },
+            )
             return None
         await self._persist_evidence(request_id, items)
 
@@ -514,10 +547,13 @@ class CouncilEngine:
             f"- ({c.made_by}) {c.claim} — matters because: {c.why_material}"
             for c in check.checkable_claims
         )
-        tools = ", ".join(
-            f"{name} ({'available' if tool.available else 'UNAVAILABLE'})"
-            for name, tool in self.evidence_tools.items()
-        )
+        # Deliberately NOT told which tools are up. A planner that knows the
+        # web is down returns an empty plan, and the request then falls back
+        # to model consensus with no record that verification was impossible
+        # — the exact failure mode the evidence layer exists to prevent.
+        # Planning blind means a downed tool produces UNAVAILABLE evidence,
+        # which becomes INSUFFICIENT verdicts, which preserves uncertainty.
+        tools = ", ".join(self.evidence_tools)
         user = (
             f"QUESTION:\n{question}\n\n"
             f"CHECKABLE CLAIMS:\n{claims}\n\n"
@@ -1051,7 +1087,7 @@ class CouncilEngine:
         async with session_scope() as s:
             req = await s.get(Request, request_id)
             req.status = status
-            req.final_answer = final_answer
+            req.final_answer = normalize_answer(final_answer)
             req.degraded = req.degraded or degraded
             req.error = error
             req.latency_ms = int((time.monotonic() - started) * 1000)
@@ -1189,6 +1225,24 @@ class CouncilEngine:
                     for st in steps
                 ],
             }
+
+
+_ESCAPES = (("\\r\\n", "\n"), ("\\n", "\n"), ("\\t", "\t"))
+
+
+def normalize_answer(text: str | None) -> str | None:
+    """Undo literal escape sequences that occasionally survive structured
+    output (a model emitting "line1\\nline2" as six characters rather than a
+    real newline). Seen live in a synthesis result. Only applied when the
+    text has no real newlines, so genuine backslashes in code are untouched.
+    """
+    if not text or "\n" in text:
+        return text
+    if not any(seq in text for seq, _ in _ESCAPES):
+        return text
+    for seq, replacement in _ESCAPES:
+        text = text.replace(seq, replacement)
+    return text
 
 
 class EvidenceContext:

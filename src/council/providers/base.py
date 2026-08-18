@@ -96,14 +96,56 @@ class ModelProvider(ABC):
         FieldStreamExtractor). The retry pass never streams."""
 
 
+def candidate_payloads(data):
+    """Yield plausible readings of a structured-output payload.
+
+    Models intermittently wrap the real object in an envelope instead of
+    emitting it directly. Two shapes seen live:
+      {"parameters": {...}}            - single-key dict envelope
+      {"claims": "{\\"claims\\": ...}"} - the WHOLE object JSON-encoded into
+                                          one field's string value
+    Both are recoverable without another round trip, so unwrap rather than
+    burning the retry (or failing the stage) on a formatting quirk.
+    """
+    import json
+
+    yield data
+    if not isinstance(data, dict):
+        return
+    for value in data.values():
+        if isinstance(value, dict):
+            yield value
+        elif isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(parsed, dict):
+                yield parsed
+                for inner in parsed.values():
+                    if isinstance(inner, dict):
+                        yield inner
+
+
+def validate_payload(data, schema: type[BaseModel]) -> BaseModel | None:
+    """Validate a payload against a schema, tolerating envelope quirks."""
+    for candidate in candidate_payloads(data):
+        try:
+            return schema.model_validate(candidate)
+        except ValidationError:
+            continue
+    return None
+
+
 def validate_or_none(schema: type[BaseModel], text: str) -> BaseModel | None:
     """Best-effort parse of model output against a schema."""
     import json
 
     try:
-        return schema.model_validate(json.loads(_strip_fences(text)))
-    except (json.JSONDecodeError, ValidationError):
+        data = json.loads(_strip_fences(text))
+    except json.JSONDecodeError:
         return None
+    return validate_payload(data, schema)
 
 
 def _strip_fences(text: str) -> str:
