@@ -43,6 +43,7 @@ type ChatEntry = {
   } | null;
   trace: Trace | null; // lazy-loaded for old turns
   showTrace: boolean;
+  live: { stage: string; text: string } | null; // streaming answer in progress
 };
 
 export default function AskPage() {
@@ -96,6 +97,7 @@ export default function AskPage() {
           },
           trace: null,
           showTrace: false,
+          live: null,
         })),
     );
   }
@@ -127,6 +129,7 @@ export default function AskPage() {
         answer: null,
         trace: null,
         showTrace: false,
+        live: null,
       },
     ]);
     try {
@@ -136,6 +139,24 @@ export default function AskPage() {
       const es = new EventSource(`${API}/requests/${id}/stream`);
       es.onmessage = async (msg) => {
         const event: StageEvent = JSON.parse(msg.data);
+        if (event.type === "delta") {
+          // Live answer text: reset the buffer when a new stage starts
+          // writing (e.g. a revision replacing the judge's draft).
+          setEntries((prev) =>
+            prev.map((e) =>
+              e.key === key
+                ? {
+                    ...e,
+                    live:
+                      e.live && e.live.stage === event.stage
+                        ? { stage: e.live.stage, text: e.live.text + (event.text ?? "") }
+                        : { stage: event.stage ?? "", text: event.text ?? "" },
+                  }
+                : e
+            )
+          );
+          return;
+        }
         setEntries((prev) =>
           prev.map((e) => (e.key === key ? { ...e, events: [...e.events, event] } : e))
         );
@@ -144,6 +165,7 @@ export default function AskPage() {
           const trace = await getTrace(id);
           patch(key, {
             running: false,
+            live: null,
             trace,
             answer: trace.final_answer
               ? {
@@ -205,6 +227,15 @@ export default function AskPage() {
 
                 {(e.running || (e.events.length > 0 && !e.answer)) && (
                   <PipelineView events={e.events} running={e.running} />
+                )}
+
+                {e.live && !e.answer && (
+                  <div className="rounded-2xl rounded-bl-sm border border-zinc-800 bg-zinc-900/40 px-5 py-4">
+                    <div className="prose-answer">
+                      <ReactMarkdown>{e.live.text}</ReactMarkdown>
+                    </div>
+                    <span className="mt-1 inline-block h-4 w-1.5 animate-pulse bg-sky-400 align-text-bottom" />
+                  </div>
                 )}
 
                 {e.error && (

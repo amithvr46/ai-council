@@ -35,6 +35,7 @@ class FakeProvider(ModelProvider):
         schema: type[BaseModel] | None = None,
         temperature: float | None = None,
         max_tokens: int = 4096,
+        on_delta=None,
     ) -> ModelResponse:
         self.calls.append({"messages": messages, "model": model, "schema": schema})
         if not self.responses:
@@ -45,6 +46,13 @@ class FakeProvider(ModelProvider):
         retried = False
         if isinstance(item, Retried):
             item, retried = item.payload, True
+        if on_delta is not None:
+            # Simulate streaming: raw JSON for schema calls, plain text
+            # otherwise, delivered in two chunks.
+            raw = json.dumps(item.model_dump()) if isinstance(item, BaseModel) else str(item)
+            mid = max(1, len(raw) // 2)
+            on_delta(raw[:mid])
+            on_delta(raw[mid:])
         # item is a str (plain content) or a BaseModel (parsed structured output)
         if isinstance(item, BaseModel):
             return ModelResponse(

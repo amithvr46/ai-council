@@ -28,6 +28,7 @@ class OpenAIProvider(ModelProvider):
         schema: type[BaseModel] | None = None,
         temperature: float | None = None,
         max_tokens: int = 4096,
+        on_delta=None,
     ) -> ModelResponse:
         kwargs: dict = {
             "model": model,
@@ -49,7 +50,13 @@ class OpenAIProvider(ModelProvider):
 
         started = time.monotonic()
         try:
-            resp = await self._client.chat.completions.create(**kwargs)
+            if on_delta is not None:
+                content, in_tok, out_tok = await self._stream(kwargs, on_delta)
+            else:
+                resp = await self._client.chat.completions.create(**kwargs)
+                content = resp.choices[0].message.content or ""
+                in_tok = resp.usage.prompt_tokens if resp.usage else 0
+                out_tok = resp.usage.completion_tokens if resp.usage else 0
         except RateLimitError as e:
             raise ProviderRateLimited(str(e)) from e
         except APITimeoutError as e:
@@ -58,13 +65,12 @@ class OpenAIProvider(ModelProvider):
             raise ProviderError(str(e)) from e
         latency_ms = int((time.monotonic() - started) * 1000)
 
-        content = resp.choices[0].message.content or ""
         result = ModelResponse(
             content=content,
             provider=self.name,
             model=model,
-            input_tokens=resp.usage.prompt_tokens if resp.usage else 0,
-            output_tokens=resp.usage.completion_tokens if resp.usage else 0,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
             latency_ms=latency_ms,
         )
 
@@ -108,3 +114,18 @@ class OpenAIProvider(ModelProvider):
             result.parsed = parsed
 
         return result
+
+    async def _stream(self, kwargs: dict, on_delta) -> tuple[str, int, int]:
+        stream = await self._client.chat.completions.create(
+            **kwargs, stream=True, stream_options={"include_usage": True}
+        )
+        content, in_tok, out_tok = "", 0, 0
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                delta = chunk.choices[0].delta.content
+                content += delta
+                on_delta(delta)
+            if chunk.usage:
+                in_tok = chunk.usage.prompt_tokens or 0
+                out_tok = chunk.usage.completion_tokens or 0
+        return content, in_tok, out_tok

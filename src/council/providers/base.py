@@ -83,11 +83,17 @@ class ModelProvider(ABC):
         schema: type[BaseModel] | None = None,
         temperature: float | None = None,
         max_tokens: int = 4096,
+        on_delta=None,
     ) -> ModelResponse:
         """Run one completion. If schema is given, response.parsed holds a
         validated instance; implementations retry exactly once on malformed
         output, then raise MalformedOutput. temperature=None omits the
-        parameter — current-generation models reject it as deprecated."""
+        parameter — current-generation models reject it as deprecated.
+
+        on_delta: optional callable(str) enabling streaming — called with
+        text increments as they arrive (raw output text; for schema calls
+        that is the raw JSON, which callers pass through a
+        FieldStreamExtractor). The retry pass never streams."""
 
 
 def validate_or_none(schema: type[BaseModel], text: str) -> BaseModel | None:

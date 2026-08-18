@@ -1,8 +1,9 @@
 export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export type StageEvent = {
-  type: "started" | "stage" | "done";
+  type: "started" | "stage" | "done" | "delta";
   stage?: string;
+  text?: string;
   status?: string;
   provider?: string;
   model?: string;

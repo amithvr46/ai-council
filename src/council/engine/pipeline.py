@@ -31,6 +31,7 @@ from council.engine.schemas import (
     Synthesis,
     VerifierReport,
 )
+from council.engine.streaming import DeltaThrottle, FieldStreamExtractor
 from council.providers.base import ModelProvider, ModelResponse, ProviderError
 
 
@@ -59,6 +60,25 @@ class CouncilEngine:
     def _emit(self, request_id: str, event: dict) -> None:
         if self._publish is not None:
             self._publish(request_id, event)
+
+    def _delta_cb(self, request_id: str, stage: str, *, extract_field: bool = False):
+        """Streaming callback for answer-producing stages: publishes live
+        text increments as {'type':'delta'} events. For schema stages the raw
+        JSON stream is filtered down to the final_answer field. Returns None
+        when nobody is listening — the provider then skips streaming."""
+        if self._publish is None:
+            return None
+        extractor = FieldStreamExtractor("final_answer") if extract_field else None
+        throttle = DeltaThrottle(
+            lambda t: self._emit(request_id, {"type": "delta", "stage": stage, "text": t})
+        )
+
+        def cb(chunk: str) -> None:
+            text = extractor.feed(chunk) if extractor else chunk
+            throttle.push(text)
+
+        cb.flush = throttle.flush  # type: ignore[attr-defined]
+        return cb
 
     def _other_provider(self, name: str) -> str:
         names = sorted(self.providers)
@@ -124,16 +144,24 @@ class CouncilEngine:
         ]
 
         budget.spend("candidate")
+        cb = self._delta_cb(request_id, "candidate_a")
         try:
-            resp = await primary.generate(messages, model=self.flagship_models[primary.name])
+            resp = await primary.generate(
+                messages, model=self.flagship_models[primary.name], on_delta=cb
+            )
+            if cb:
+                cb.flush()
         except ProviderError as e:
             await self._record_error(request_id, seq(), "candidate_a", primary.name, e)
             fallback_name = self._other_provider(primary.name)
             fallback = self.providers[fallback_name]
             budget.spend("candidate_fallback")
+            cb2 = self._delta_cb(request_id, "candidate_fallback")
             resp = await fallback.generate(
-                messages, model=self.flagship_models[fallback_name]
+                messages, model=self.flagship_models[fallback_name], on_delta=cb2
             )  # both providers failing fails the request — recorded by run()
+            if cb2:
+                cb2.flush()
             await self._record_call(
                 request_id, seq(), "candidate_fallback", resp, prompt.version_id
             )
@@ -308,6 +336,7 @@ class CouncilEngine:
             f"COMPARISON SUMMARY:\n{check.summary}"
         )
         budget.spend("synthesis")
+        cb = self._delta_cb(request_id, "synthesis", extract_field=True)
         try:
             resp = await provider.generate(
                 [
@@ -316,7 +345,10 @@ class CouncilEngine:
                 ],
                 model=model,
                 schema=Synthesis,
+                on_delta=cb,
             )
+            if cb:
+                cb.flush()
         except ProviderError as e:
             await self._record_error(request_id, seq(), "synthesis", provider.name, e)
             return None
@@ -412,6 +444,7 @@ class CouncilEngine:
                     ) or "(no material issues found)"
                     parts.append(f"CRITIQUE OF CANDIDATE {label}:\n{issues}\n{c.overall}")
         budget.spend("judge")
+        cb = self._delta_cb(request_id, "judge", extract_field=True)
         try:
             resp = await provider.generate(
                 [
@@ -421,7 +454,10 @@ class CouncilEngine:
                 model=model,
                 schema=JudgeVerdict,
                 max_tokens=8192,
+                on_delta=cb,
             )
+            if cb:
+                cb.flush()
         except ProviderError as e:
             await self._record_error(request_id, seq(), "judge", provider.name, e)
             return None
@@ -504,6 +540,7 @@ class CouncilEngine:
             f"CANDIDATE B:\n{candidates['B'].content}"
         )
         budget.spend("revision")
+        cb = self._delta_cb(request_id, "revision", extract_field=True)
         try:
             resp = await provider.generate(
                 [
@@ -513,7 +550,10 @@ class CouncilEngine:
                 model=model,
                 schema=RevisedAnswer,
                 max_tokens=8192,
+                on_delta=cb,
             )
+            if cb:
+                cb.flush()
         except ProviderError as e:
             await self._record_error(request_id, seq(), "revision", provider.name, e)
             return None
