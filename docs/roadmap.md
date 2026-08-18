@@ -1,11 +1,13 @@
-# AI Council — post-V1 roadmap (PROPOSAL, not yet frozen)
+# AI Council — post-V1 roadmap (FROZEN 2026-08-18)
 
 **V1 status:** PASS, frozen at `bbbaf82`. 132 deterministic tests. No further
 V1 architecture changes or polishing unless normal usage exposes a real defect.
 
-**This document:** proposed sequencing for post-V1 work, prioritised around
-Amith's four stated product goals. To be reviewed (Amith + GPT) and frozen
-before implementation starts.
+**This document:** FROZEN sequencing for post-V1 work, reviewed and approved
+by GPT with three amendments (budget controls promoted to Phase 2A;
+data-readiness threshold replacing calendar time as the Auto prerequisite;
+Phase 5 checkpoint granularity clarified). No further roadmap loop — changes
+require a real defect or a stated change of goals.
 
 ---
 
@@ -18,17 +20,48 @@ resume work time-sensitive in a way Build Mode is not.
 So the sequence is **value-per-effort with the deadline weighted in, and cost
 controls landing before the phases that can spend money quickly.**
 
-Two rules hold across every phase:
+Four rules hold across every phase:
 
 1. **The V1 reliability engine is the foundation and is not redesigned.**
    Every phase extends it.
 2. **Every loop has a hard cap enforced in code, and hitting a cap reports
    honestly** rather than silently degrading or retrying. This is the V1
    principle carried forward, not a new one.
+3. **Every capability added from this point inherits spending controls
+   before it can spend.** Budget controls precede the capability, never
+   follow it.
+4. **Affordability is checked forward, not backward.** Before beginning any
+   iteration, the system checks whether enough budget remains to *reasonably
+   complete that iteration* — not merely whether current spend is under the
+   ceiling. Work that cannot fit in the remaining budget is never knowingly
+   started; the system stops and says so.
 
 ---
 
-## Phase 2 — Source Material
+## Phase 2A — Budget controls (first, before anything that can spend)
+
+**Goal served:** budget as a first-class requirement.
+
+Ships before document ingestion. Nothing in Phase 2B/2C can spend money
+until these exist.
+
+**Scope**
+
+- Daily and monthly spend ceilings, configurable
+- Warning threshold (notify) and hard stop (refuse) as separate settings
+- Forward affordability check: an estimated cost for the requested mode is
+  compared against remaining budget *before* the request starts; a request
+  that cannot fit is refused with a clear message, not started and killed
+  mid-flight
+- Spend visibility in the UI: today, this month, remaining, and what the
+  ceiling is
+- Hard stop is enforced in code at the engine boundary, not in the UI
+
+**Effort:** ~0.5 build session.
+
+---
+
+## Phase 2B / 2C — Source Material
 
 **Goal served:** #2 (documents and resumes).
 
@@ -45,22 +78,35 @@ version. The V1 spec's resume evidence list (original resume, JD, supported
 experience, ATS terminology, interview defensibility) becomes real without
 new architecture.
 
-**Scope**
+**Scope — 2B (ingestion)**
 
 - File upload: PDF, docx, txt, md, code files
 - Text extraction; `documents` table; per-request attachment
 - Source material as a first-class evidence kind alongside web and code
-- Artifact output: downloadable .md / .docx
+- Per-document size/token caps
+
+**Scope — 2C (workflow + output)**
+
+- Artifact output: downloadable .docx / .md
 - One workflow preset — the resume flow:
   analyse requirements → identify supported experience → rewrite →
   ATS/recruiter/technical review → detect invented claims → correct → final
-- **Budget ceilings**: daily/monthly limits, configurable warn threshold and
-  hard stop, per-document size/token caps
 - **Auto instrumentation**: capture task category and predicted-vs-actual
   disagreement per request (cheap now, and it is what makes Phase 3 possible
   without guessing)
 
-**Effort:** 2–3 build sessions.
+**Acceptance — concrete, not a universal document platform**
+
+- Primary: current resume + Azure DevOps job description → requirements
+  analysis → supported-experience mapping → tailored resume →
+  unsupported/invented-claim audit → final downloadable DOCX
+- Secondary: source notes/document → accurate, reviewed technical
+  documentation
+
+File-format edge cases are explicitly out of scope. PDF/DOCX/TXT/MD support
+is useful; unusual formats must not be allowed to expand the phase.
+
+**Effort:** 2–3 build sessions (2A + 2B + 2C).
 
 **After Phase 2, AI Council can:** produce a tailored, hallucination-checked
 resume for any job description; turn rough notes into documentation,
@@ -77,11 +123,21 @@ invented claims and requirement coverage.
 that can reliably handle the task** and escalates only when justified.
 
 **Why here and not earlier:** the router must be designed from data, not
-guessed thresholds — Amith was explicit about this and it is correct. But
-"wait for data" only works if the data is deliberately collected. Phase 2
-instruments it; Phase 3 builds the router from a few weeks of real usage plus
-a golden-set sweep across all three modes (giving comparative quality, cost
-and latency per task category).
+guessed thresholds. Phase 2 instruments the data; Phase 3 builds the router
+from it.
+
+**Prerequisite is a data-readiness threshold, NOT elapsed calendar time.**
+Build Auto as soon as representative data exists; if that is sooner, start
+sooner. Proposed threshold (adjustable):
+
+- one full golden-set sweep across quick / council / deep, giving comparative
+  quality, cost and latency per task category
+- real usage spanning at least 5 distinct task categories
+- enough rated requests to distinguish mode quality within a category rather
+  than across the whole corpus
+
+Learning does not stop when Auto ships — routing decisions and their outcomes
+continue feeding the same tables, and the router is retunable.
 
 **Scope**
 
@@ -142,16 +198,21 @@ where uncontrolled spend genuinely lives.
 
 **Therefore scoped hard:**
 
-- plan → **user approves** → scaffold → implement in bounded increments →
-  test → review
+- requirements → plan → **user approves the plan (always mandatory)** →
+  bounded implementation → tests/review → **major checkpoint** →
+  continue or stop
 - Work isolated in a git worktree
 - Per-phase iteration caps; per-build cost ceiling; projected cost shown
-  before a build starts
-- **Mandatory human checkpoints between stages** rather than end-to-end
-  autonomy — the user approves the plan before implementation and each
-  increment before the next
+  before a build starts; forward affordability checked before each increment
 - Kill switch
 - No autonomous "keep trying until it works" behaviour, ever
+
+**Checkpoint granularity.** Approval of the initial plan is permanently
+mandatory. Checkpoints during implementation are *major* — at meaningful
+boundaries, not after every small increment. Requiring approval of every
+increment would make the user the orchestrator, which defeats the purpose.
+Checkpoint frequency becomes policy-controlled as the system earns trust;
+cost ceilings, bounded iterations and the kill switch never do.
 
 **Why after Phase 4:** the repair loop is the hard and dangerous part. Phase 4
 proves it on one file for pennies; Phase 5 runs it dozens of times across a
@@ -170,7 +231,8 @@ on spend.
 | Phase | Added |
 |---|---|
 | V1 (done) | Per-mode call budgets in code; physical API attempt accounting; per-request cost visible; cost stats endpoint |
-| 2 | Daily/monthly ceilings, warn threshold + hard stop; per-document size/token caps; artifact generation capped |
+| **2A (first)** | Daily/monthly ceilings, warn threshold + hard stop; forward affordability check before a request starts; spend visibility |
+| 2B/2C | Per-document size/token caps; artifact generation capped |
 | 3 | Cost-aware routing (cheapest sufficient path); budget-remaining as routing input; per-category cost targets |
 | 4 | Repair-iteration cap; tool-execution cap; per-task ceiling checked before each iteration |
 | 5 | Per-build ceiling; per-phase caps; checkpoint gates; kill switch; projected cost before start |
@@ -191,15 +253,19 @@ on spend.
 
 ---
 
-## Open decisions (defaults taken; overrule freely)
+## Decisions (settled at freeze)
 
-1. **Phase 2 leads with documents rather than Auto.** Rationale: the Aug–Oct
-   job search deadline. If mode-picking friction proves more painful in daily
-   use than the resume deadline is valuable, swap Phases 2 and 3 — Auto is
-   the smaller build.
-2. **Phase 4 is a real phase, not a thin stepping stone.** Rationale: it is
-   independently useful for weeks of daily debugging, and the repair loop
-   deserves to earn trust at small scale before Build Mode scales it.
+1. **Phase 2 leads with documents rather than Auto** — the Aug–Oct job search
+   deadline. Confirmed by review.
+2. **Phase 4 is a real standalone phase, not a thin stepping stone** — it is
+   independently useful for daily debugging, and the repair loop must earn
+   trust at small scale before Build Mode scales it. Confirmed by review.
+3. **Budget controls are Phase 2A** — they ship before any capability that
+   can spend. Added by review.
+4. **Auto's prerequisite is data readiness, not elapsed time.** Added by
+   review.
+5. **Phase 5 requires mandatory plan approval and major checkpoints**, not
+   per-increment approval. Added by review.
 
 ## Concurrent with Phase 2
 
