@@ -36,6 +36,7 @@ from council.documents.discovery import (
     DiscoveryResult,
     discover,
 )
+from council.documents.mirroring import find_mirroring
 from council.documents.profile import (
     CareerProfile,
     ConfirmedExperience,
@@ -93,10 +94,29 @@ class JDAnalysis:
     def gaps(self) -> list[str]:
         return self.discovery.gaps
 
+    @property
+    def match_quality(self) -> str:
+        """strong | moderate | weak — computed from what the JD asks for.
+
+        Advisory only (contract §7). A weak match never prevents the artifact
+        from being produced; it tells the user what they are walking into. The
+        alternative — refusing to generate — would push the system towards
+        improving the score, and the only way to improve it is to claim things
+        that are not true.
+        """
+        supported, gaps = len(self.discovery.supported), len(self.gaps)
+        if supported + gaps == 0:
+            return "moderate"
+        ratio = supported / (supported + gaps)
+        if ratio >= 0.8:
+            return "strong"
+        return "moderate" if ratio >= 0.5 else "weak"
+
     def as_dict(self) -> dict:
         return {
             "role_family": self.role_family,
             "emphasis": self.emphasis,
+            "match_quality": self.match_quality,
             **self.discovery.as_dict(),
             "conflicts": [c.as_dict() for c in self.conflicts],
         }
@@ -341,7 +361,8 @@ class ResumeWorkflow:
 
     def check(self, draft: ResumeDraft, analysis: JDAnalysis,
               confirmed: ConfirmedExperience,
-              sources: list[str] | None = None) -> list[dict]:
+              sources: list[str] | None = None,
+              jd_text: str = "") -> list[dict]:
         """Pure functions over the draft. A model cannot argue with these.
 
         `sources` lets a Tier 2B or Tier 3 finding be cleared when a career
@@ -407,6 +428,11 @@ class ResumeWorkflow:
                         "class": "GAP_TECHNOLOGY",
                         "reasons": ["unsupported technology listed as a skill"],
                     })
+
+        # Contract §6: emphasising what the JD wants is the job; reproducing
+        # its sentences is the JD rewritten in first person.
+        if jd_text:
+            findings.extend(find_mirroring(draft.bullets(), jd_text))
         return findings
 
     # -------------------------------------------------------------- stage 6
@@ -467,7 +493,7 @@ class ResumeWorkflow:
             self.review(jd_text, analysis, draft, confirmed, trace)
         )
         sources = source_texts(documents)
-        findings = self.check(draft, analysis, confirmed, sources)
+        findings = self.check(draft, analysis, confirmed, sources, jd_text)
         review = await review_task
         trace.record("mechanical_check", findings=len(findings))
 
@@ -475,7 +501,7 @@ class ResumeWorkflow:
         # The comma rule is deterministic, so enforce it deterministically
         # rather than hoping the correction pass obeyed it.
         corrected = enforce_style(corrected)
-        remaining = self.check(corrected, analysis, confirmed, sources)
+        remaining = self.check(corrected, analysis, confirmed, sources, jd_text)
         trace.record(
             "post_correction_check",
             findings=len(remaining),

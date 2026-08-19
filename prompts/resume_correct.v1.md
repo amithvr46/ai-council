@@ -25,6 +25,10 @@ pass available.
   confirms. Remove it. Do not substitute a similar-sounding one.
 - **GAP technology present** — remove it entirely, including from the skills
   section and any implication. Replace with confirmed transferable work.
+- **JD_MIRRORING** — the bullet reproduces the job description's own wording
+  or sentence shape. Rewrite it in the voice of the rest of the resume,
+  describing the work as this engineer would recall it rather than as the
+  posting words it. Keep the substance; drop the borrowed phrasing.
 - **Style violations** — fix the specific text. A comma immediately before
   "and" is never acceptable outside a verbatim quote.
 - **Review findings** — apply the concrete fix given, in the voice of the rest

@@ -266,8 +266,13 @@ def generate_resume(
         f"role family: {result.analysis.role_family} | "
         f"{result.trace.model_calls} model calls | ${result.trace.cost_usd:.4f}"
     )
+    typer.echo(f"match quality: {result.analysis.match_quality} (advisory)")
     if result.analysis.gaps:
         typer.echo(f"gaps not claimed: {', '.join(result.analysis.gaps)}")
+        typer.echo(
+            "  The resume was still written — these are reported, never "
+            "manufactured. The application decision stays yours."
+        )
     if result.analysis.conflicts:
         typer.echo(
             f"{len(result.analysis.conflicts)} unresolved source conflict(s) — "
