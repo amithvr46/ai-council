@@ -135,3 +135,56 @@ export async function rate(id: string, rating: number): Promise<void> {
     body: JSON.stringify({ rating }),
   });
 }
+
+// ---------------------------------------------------------------- resume
+
+export type ResumeResult = {
+  id: string;
+  outcome_kind: string;
+  role_family: string;
+  match_quality: string;
+  gaps: string[];
+  findings: { location: string; text: string; class: string; reasons: string[] }[];
+  would_submit: boolean | null;
+  cost_usd: number;
+  model_calls: number;
+  download_url: string;
+  instruction: { career_statements: string[]; preferences: string[] };
+};
+
+export async function uploadDocument(
+  file: File,
+  authority: string,
+  title = "",
+): Promise<{ id: string; title: string; authority: string; char_count: number }> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("authority", authority);
+  form.append("title", title);
+  const r = await fetch(`${API}/documents`, { method: "POST", body: form });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? "upload failed");
+  return r.json();
+}
+
+export async function generateResume(body: {
+  jd_document_id?: string;
+  jd_text?: string;
+  instruction?: string;
+  name?: string;
+  contact?: string;
+}): Promise<ResumeResult> {
+  const r = await fetch(`${API}/artifacts/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const detail = (await r.json().catch(() => ({}))).detail;
+    throw new Error(typeof detail === "string" ? detail : "resume generation failed");
+  }
+  return r.json();
+}
+
+export function downloadUrl(path: string): string {
+  return `${API}${path}`;
+}

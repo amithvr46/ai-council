@@ -103,10 +103,15 @@ class DiscoveryResult:
     gaps: list[str] = field(default_factory=list)
     discovered: list[str] = field(default_factory=list)  # newly learned names
     escalated: bool = False
+    # True when discovery was warranted but the provider was unreachable. Gap
+    # coverage is narrower for that run, and saying so beats letting an empty
+    # discovery read as "nothing unknown was found".
+    unavailable: bool = False
     candidates_considered: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
+            "discovery_unavailable": self.unavailable,
             "supported": self.supported,
             "gaps": self.gaps,
             "discovered": self.discovered,
@@ -272,6 +277,12 @@ async def discover(
         return result  # nothing meaningful left; no call, no cost
 
     payload = await ask_model(candidates)
+    if (payload or {}).get("unavailable"):
+        # Reported rather than swallowed: gap coverage is narrower this run,
+        # and the caller deserves to know that rather than read an empty
+        # discovery as "nothing unknown was found".
+        result.unavailable = True
+        return result
     result.escalated = True
 
     discovered = {

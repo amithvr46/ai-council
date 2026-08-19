@@ -19,6 +19,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <nav className="flex gap-4 text-sm text-zinc-400">
               <Link href="/" className="hover:text-zinc-100">Ask</Link>
+              <Link href="/resume" className="hover:text-zinc-100">Resume</Link>
               <Link href="/history" className="hover:text-zinc-100">History</Link>
             </nav>
             <div className="ml-auto">

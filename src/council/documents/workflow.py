@@ -36,6 +36,8 @@ from council.documents.discovery import (
     DiscoveryResult,
     discover,
 )
+from council.documents.instructions import Instruction
+from council.documents.instructions import parse as parse_instruction
 from council.documents.mirroring import find_mirroring
 from council.documents.profile import (
     CareerProfile,
@@ -52,6 +54,7 @@ from council.documents.schemas import (
     TechnologyDiscovery,
 )
 from council.documents.support import directly_supported, source_texts
+from council.providers.base import ProviderError
 
 # Model calls this workflow may make. Discovery is conditional, correction only
 # fires when something was found, so the common path is 3.
@@ -181,6 +184,21 @@ class ResumeWorkflow:
     """Orchestrates the stages. Providers are injected; nothing here knows
     which vendor is behind `draft_provider` or `review_provider`."""
 
+    _instruction: Instruction = Instruction()
+
+    def _with_preferences(self, context: str) -> str:
+        """Append this run's preferences, clearly labelled as preferences.
+
+        They shape presentation only. Naming them as request-only in the prompt
+        is what keeps a model from reading "target SRE" as a career fact."""
+        prefs = self._instruction.preference_text()
+        if not prefs:
+            return context
+        return (
+            f"{context}\n\nREQUEST-ONLY PREFERENCES for this resume (presentation "
+            f"guidance, NOT career facts, and never evidence of experience):\n{prefs}"
+        )
+
     def __init__(
         self,
         providers: dict,
@@ -215,13 +233,30 @@ class ResumeWorkflow:
 
     async def _call(self, trace: WorkflowTrace, stage: str, provider_name: str,
                     model: str, messages, schema):
+        """Returns the parsed payload, or None when the stage could not run.
+
+        A provider outage degrades the STAGE rather than destroying the
+        outcome. Every caller already handles None: discovery falls back to
+        mechanical classification, review is skipped, correction keeps the
+        reviewed draft. Only the draft itself is essential, and its own None
+        path raises GenerationFailed — so the one stage that must not silently
+        vanish still cannot.
+
+        Found by a real run: an outage in the optional discovery stage returned
+        HTTP 500 and produced no resume at all, which is the worst possible
+        trade for an enhancement.
+        """
         provider = self.providers[provider_name]
-        response = await provider.generate(
-            messages,
-            model=model,
-            schema=schema,
-            max_tokens=self.STAGE_MAX_TOKENS.get(stage, 4096),
-        )
+        try:
+            response = await provider.generate(
+                messages,
+                model=model,
+                schema=schema,
+                max_tokens=self.STAGE_MAX_TOKENS.get(stage, 4096),
+            )
+        except ProviderError as e:
+            trace.record(stage, provider=provider_name, model=model, ok=False, error=str(e))
+            return None
         trace.model_calls += 1
         trace.cost_usd += getattr(response, "cost_usd", 0.0) or 0.0
         trace.record(
@@ -253,6 +288,12 @@ class ResumeWorkflow:
         conflicts = find_conflicts(documents)
 
         async def ask_model(candidates: list[str]) -> dict:
+            # Discovery is an ENHANCEMENT: it widens gap reporting to terms the
+            # local vocabulary has never seen. When it cannot run, the resume
+            # is still fully writable from mechanical classification, and
+            # failing open is safe in the one direction that matters — a
+            # missing discovery can only UNDER-report a gap, never manufacture
+            # a claim, because only career evidence confirms anything.
             payload = await self._call(
                 trace,
                 "technology_discovery",
@@ -264,7 +305,9 @@ class ResumeWorkflow:
                 ],
                 TechnologyDiscovery,
             )
-            return payload.model_dump() if payload is not None else {"technologies": []}
+            if payload is None:
+                return {"technologies": [], "unavailable": True}
+            return payload.model_dump()
 
         discovery = await discover(jd_text, confirmed, cache=cache, ask_model=ask_model)
         trace.record(
@@ -281,6 +324,7 @@ class ResumeWorkflow:
 
     async def select(self, jd_text, analysis, profile, confirmed, trace) -> ExperienceSelection:
         context = _career_context(profile, confirmed, analysis.conflicts)
+        context = self._with_preferences(context)
         user = (
             f"{context}\n\n"
             f"ROLE FAMILY: {analysis.role_family}\n"
@@ -307,6 +351,7 @@ class ResumeWorkflow:
 
     async def draft(self, jd_text, analysis, plan, profile, confirmed, trace) -> ResumeDraft:
         context = _career_context(profile, confirmed, analysis.conflicts)
+        context = self._with_preferences(context)
         user = (
             f"{context}\n\n"
             f"GAP TECHNOLOGIES — must not appear anywhere, including skills: "
@@ -478,9 +523,20 @@ class ResumeWorkflow:
         documents: list[dict],
         *,
         cache: DiscoveryCache | None = None,
+        instruction: str | Instruction | None = None,
     ) -> GeneratedResume:
+        """`instruction` is one natural-language line from the user. Its career
+        statements were already turned into a user_statement career source by
+        the caller; only the request-only preferences reach the writing stages,
+        which is what stops "keep it to 2 pages" becoming a career fact."""
         trace = WorkflowTrace()
         self._sources_blob = _sources_blob(documents)
+        self._instruction = (
+            instruction if isinstance(instruction, Instruction)
+            else parse_instruction(instruction)
+        )
+        if self._instruction.preferences:
+            trace.record("user_preferences", count=len(self._instruction.preferences))
 
         analysis, confirmed = await self.analyse(
             jd_text, profile, documents, cache=cache, trace=trace

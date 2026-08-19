@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
+from council import outcomes
 from council.db.models import Base, Conversation, DocumentRow, Request
 from council.db.session import ensure_engine, get_engine, session_scope
 from council.documents.extract import ExtractionError, extract
@@ -596,6 +597,183 @@ async def analyze_jd(body: dict):
         "technologies_supported": tech_supported,
         "technologies_unsupported": tech_unsupported,
     }
+
+
+# --------------------------------------------------------------- artifacts
+#
+# The One-Step resume path: career sources + JD + one optional line of natural
+# language in, a downloadable DOCX out. No mode, no model choice, no bullet
+# approval — the outcome determines the workflow, so this never touches
+# quick/council/deep routing at all.
+
+
+class ResumeBody(BaseModel):
+    jd_document_id: str | None = None
+    jd_text: str = ""
+    instruction: str = ""
+    name: str = ""
+    contact: str = ""
+
+
+@app.post("/artifacts/resume")
+async def generate_resume(body: ResumeBody):
+    import tempfile
+    from pathlib import Path as _Path
+
+    from council.documents.instructions import parse as parse_instruction
+    from council.documents.render import render_docx
+    from council.documents.store import (
+        load_discovery_cache,
+        save_artifact,
+        save_conflicts,
+        save_discovery_cache,
+    )
+    from council.documents.workflow import GenerationFailed
+    from council.engine.factory import build_resume_workflow
+
+    jd_text = body.jd_text.strip()
+    if body.jd_document_id:
+        async with session_scope() as s:
+            row = await s.get(DocumentRow, body.jd_document_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail="jd document not found")
+            jd_text = row.text
+    if not jd_text:
+        raise HTTPException(status_code=422, detail="a job description is required")
+
+    # One line of natural language carries two different things. The durable
+    # career facts become a real career source with user_statement provenance;
+    # the request-only preferences never touch the profile.
+    instruction = parse_instruction(body.instruction)
+    if instruction.has_career_statements:
+        await _store_user_statement(instruction.career_text())
+
+    profile = await load_profile()
+    documents = await career_documents()
+    cache = await load_discovery_cache()
+    workflow = build_resume_workflow()
+    try:
+        result = await workflow.run(
+            jd_text, profile, documents, cache=cache, instruction=instruction
+        )
+    except GenerationFailed as e:
+        raise HTTPException(status_code=502, detail=str(e)) from None
+    await save_discovery_cache(cache)
+    await save_conflicts(result.analysis.conflicts)
+
+    # Written to a private temp directory, never into the repository or any
+    # user-visible path. Only the artifact id is handed out.
+    out_dir = _Path(tempfile.gettempdir()) / "council-artifacts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = render_docx(
+        result.draft, str(out_dir / "resume.docx"), name=body.name, contact=body.contact
+    )
+
+    artifact_id = await save_artifact(
+        kind=outcomes.RESUME_TAILOR,
+        jd_document_id=body.jd_document_id,
+        role_family=result.analysis.role_family,
+        title=body.name or "Tailored resume",
+        content=result.draft.model_dump(),
+        trace={
+            "analysis": result.analysis.as_dict(),
+            "review": result.review.model_dump() if result.review else None,
+            "findings": result.findings,
+            "instruction": instruction.as_dict(),
+            **result.trace.as_dict(),
+        },
+        cost_usd=result.trace.cost_usd,
+        file_path=str(path),
+    )
+    final_path = out_dir / f"{artifact_id}.docx"
+    _Path(path).rename(final_path)
+    await _set_artifact_path(artifact_id, str(final_path))
+
+    return {
+        "id": artifact_id,
+        "outcome_kind": outcomes.RESUME_TAILOR,
+        "role_family": result.analysis.role_family,
+        "match_quality": result.analysis.match_quality,
+        "gaps": result.analysis.gaps,
+        "findings": result.findings,
+        "would_submit": result.review.would_submit if result.review else None,
+        "cost_usd": round(result.trace.cost_usd, 4),
+        "model_calls": result.trace.model_calls,
+        "download_url": f"/artifacts/{artifact_id}/download",
+        "instruction": instruction.as_dict(),
+    }
+
+
+async def _store_user_statement(text: str) -> None:
+    """Persist an explicit career statement as its own career source.
+
+    Kept distinct from document-derived evidence so the sources map can still
+    answer "who established this?" honestly.
+    """
+    from council.documents.extract import Extracted
+    from council.documents.profile import AUTHORITY_USER_STATEMENT
+    from council.documents.store import store_document
+
+    await store_document(
+        filename="user-statement.txt",
+        title="Stated by you",
+        authority=AUTHORITY_USER_STATEMENT,
+        extracted=Extracted(
+            text=text, char_count=len(text), truncated=False, detected_kind="text"
+        ),
+    )
+
+
+async def _set_artifact_path(artifact_id: str, path: str) -> None:
+    from council.db.models import ArtifactRow
+
+    async with session_scope() as s:
+        row = await s.get(ArtifactRow, artifact_id)
+        if row is not None:
+            row.file_path = path
+
+
+@app.get("/artifacts")
+async def list_artifacts_endpoint():
+    from council.documents.store import list_artifacts
+
+    return {"items": await list_artifacts()}
+
+
+@app.get("/artifacts/{artifact_id}")
+async def get_artifact_endpoint(artifact_id: str):
+    from council.documents.store import get_artifact
+
+    artifact = await get_artifact(artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    # The stored path is a private server detail; the client gets a URL.
+    artifact.pop("file_path", None)
+    artifact["download_url"] = f"/artifacts/{artifact_id}/download"
+    return artifact
+
+
+@app.get("/artifacts/{artifact_id}/download")
+async def download_artifact(artifact_id: str):
+    from pathlib import Path as _Path
+
+    from fastapi.responses import FileResponse
+
+    from council.documents.store import get_artifact
+
+    artifact = await get_artifact(artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    path = _Path(artifact.get("file_path") or "")
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail="the generated file is no longer available")
+    return FileResponse(
+        path,
+        media_type=(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ),
+        filename="resume.docx",
+    )
 
 
 # ---------------------------------------------------------------- budget

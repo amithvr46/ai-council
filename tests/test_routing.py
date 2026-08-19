@@ -325,3 +325,56 @@ def test_multi_word_self_reference_is_recognised(question):
     a legitimate quick."""
     assert needs_fresh_information(question) is False
     assert decide(question).mode == "quick"
+
+
+# ========= amendment: external state overrides self-reference suppression
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Is this Terraform code valid with the current provider version?",
+        "Will this Kubernetes manifest work with the latest AKS version?",
+        "Does this code still work with the current Azure SDK?",
+        "Is my chart compatible with the newest Helm release?",
+        "Has the API I use in this script been deprecated recently?",
+    ],
+)
+def test_current_external_state_beats_self_reference(question):
+    """Self-reference normally suppresses freshness — no search makes someone's
+    resume newer. But when CURRENT EXTERNAL STATE decides whether the answer is
+    correct, being wrong about the world makes the answer wrong regardless of
+    whose code it is. Freshness wins."""
+    assert needs_fresh_information(question) is True, question
+    assert decide(question).mode == "deep"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Rewrite my current resume.",
+        "Review the latest version of this code.",
+        "Shorten my current summary.",
+        "Clean up the current version of this Helm template.",
+        "Summarise the latest draft of my document.",
+    ],
+)
+def test_the_override_does_not_leak_into_plain_transformations(question):
+    """'the latest version OF THIS CODE' is the user's file, not the world's.
+    The override must not fire merely because the word 'version' appears."""
+    assert needs_fresh_information(question) is False, question
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Shorten this to one sentence: 'Cloud engineer with seven years.'",
+        "Rewrite that in plainer language.",
+        "Summarise the following in two lines.",
+    ],
+)
+def test_a_transform_verb_on_a_bare_deictic_is_still_transformation(question):
+    """Found by the controlled evaluation: "Shorten this to one sentence"
+    carries no possessive, so it fell through to council and cost a legitimate
+    quick."""
+    assert decide(question).mode == "quick", question

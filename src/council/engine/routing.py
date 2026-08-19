@@ -60,10 +60,19 @@ _FACT_QUERY = re.compile(
 
 # The user is pointing at their own material: this is transformation work, and
 # no amount of web search makes their resume newer.
-_TRANSFORM_VERB = re.compile(
-    r"\b(?:rewrite|reword|rephrase|shorten|lengthen|expand|condense|summari[sz]e|"
+_TRANSFORM_VERBS = (
+    r"rewrite|reword|rephrase|shorten|lengthen|expand|condense|summari[sz]e|"
     r"review|proofread|edit|revise|polish|tidy|clean up|format|reformat|refactor|"
-    r"fix|debug|translate|convert|improve|critique|check over)\b",
+    r"fix|debug|translate|convert|improve|critique|check over"
+)
+_TRANSFORM_VERB = re.compile(rf"\b(?:{_TRANSFORM_VERBS})\b", re.I)
+
+# "Shorten this to one sentence: '...'" carries no possessive, but a
+# transformation verb pointing at a bare deictic is still work on the user's
+# own material. Found by the controlled evaluation, where it cost a legitimate
+# quick.
+_TRANSFORM_ON_DEICTIC = re.compile(
+    rf"\b(?:{_TRANSFORM_VERBS})\b\s+(?:this|that|it|these|the following|the below)\b",
     re.I,
 )
 
@@ -79,6 +88,29 @@ _SELF_REFERENCE = re.compile(
     r"th(?:is|e) (?:\w+ ){0,2}(?:code|file|document|resume|text|snippet|function|"
     r"config|script|error|draft|summary|paragraph|section|manifest|template|module)|"
     r"these (?:\w+ ){0,2}(?:files|documents|notes|bullets|scripts|configs))\b",
+    re.I,
+)
+
+# Self-reference normally suppresses freshness: no search makes the user's own
+# resume newer. But it must NOT suppress it when CURRENT EXTERNAL STATE decides
+# whether the answer is correct —
+#
+#   "Is this Terraform code valid with the current provider version?"
+#
+# points at the user's material AND depends on what the provider ships today.
+# Freshness wins there, because being wrong about the external state makes the
+# answer wrong regardless of whose code it is.
+_EXTERNAL_STATE = (
+    r"version|versions|release|releases|sdk|api|provider|runtime|image|package|"
+    r"dependency|dependencies|pricing|price|quota|limit|docs|documentation|"
+    r"support|deprecat\w+|end[- ]of[- ]life|eol"
+)
+# ...unless the external-state noun belongs to the user: "the latest version OF
+# THIS CODE" is their file, not the world's.
+_EXTERNAL_STATE_NEAR_RECENCY = re.compile(
+    rf"\b(?:{_RECENCY_PHRASES})\b[\w\s]{{0,20}}?\b(?:{_EXTERNAL_STATE})\b"
+    rf"(?!\s+of\s+(?:my|this|these|our|the attached))"
+    rf"|\b(?:{_EXTERNAL_STATE})\b[\w\s]{{0,12}}?\b(?:{_RECENCY_PHRASES})\b",
     re.I,
 )
 
@@ -112,6 +144,12 @@ def needs_fresh_information(text: str) -> bool:
     """
     if not _RECENCY.search(text):
         return False
+
+    # Current external state decides correctness: freshness wins even when the
+    # request points at the user's own material.
+    if _EXTERNAL_STATE_NEAR_RECENCY.search(text):
+        return True
+
     # Remove the recency phrases first so "this week" is never read as a
     # pointer to the user's own material.
     stripped = _strip_recency(text)
@@ -130,7 +168,10 @@ def extract_features(text: str) -> dict:
         "needs_fresh_information": needs_fresh_information(text),
         "has_code": bool(_CODE_BLOCK.search(text)),
         "is_transformation": bool(_TRANSFORM_VERB.search(text))
-        and bool(_SELF_REFERENCE.search(_strip_recency(text))),
+        and bool(
+            _SELF_REFERENCE.search(_strip_recency(text))
+            or _TRANSFORM_ON_DEICTIC.search(text)
+        ),
         "is_opinion_or_creative": bool(_OPINION.search(text)),
         "length": len(text),
     }
