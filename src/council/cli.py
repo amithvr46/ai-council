@@ -77,6 +77,19 @@ def show(request_id: str):
     typer.echo(json.dumps(asyncio.run(_run()), indent=2, default=str))
 
 
+@app.command("db-status")
+def db_status():
+    """What the database contains, which migration revision it matches, and
+    exactly what to run. Shell-quoting-free diagnosis of migration state."""
+    from council.db.status import collect, render
+
+    async def _run():
+        init_engine()
+        return await collect()
+
+    typer.echo(render(asyncio.run(_run())))
+
+
 @app.command("routing-report")
 def routing_report(
     data_class: str = typer.Option(
