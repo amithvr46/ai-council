@@ -39,6 +39,7 @@ const CLASS_COLORS: Record<string, string> = {
 
 export default function TraceView({ trace }: { trace: Trace }) {
   const byStage = (name: string) => trace.steps.find((s) => s.stage === name);
+  const routing = byStage("routing")?.output as any;
   const candA = byStage("candidate_a");
   const candB = byStage("candidate_b");
   const check = byStage("combined_check")?.output as any;
@@ -48,6 +49,19 @@ export default function TraceView({ trace }: { trace: Trace }) {
 
   return (
     <div className="space-y-2">
+      {routing && (
+        <Section title={`Routing · chose ${routing.chosen} · free`}>
+          <div className="text-zinc-300">
+            <p>{routing.reason}</p>
+            <p className="mt-1 text-xs text-zinc-500">
+              decided at the {routing.deciding_rung} rung
+              {routing.candidates_considered?.length
+                ? ` · affordable: ${routing.candidates_considered.join(", ")}`
+                : ""}
+            </p>
+          </div>
+        </Section>
+      )}
       {candA && candB && (
         <>
           <Section title={`Candidate A · ${candA.provider} · $${candA.cost_usd.toFixed(4)}`}>

@@ -21,6 +21,7 @@ import Sidebar, {
 import TraceView from "@/components/TraceView";
 
 const MODES = [
+  { id: "auto", label: "Auto", hint: "picks for you, costs nothing to decide" },
   { id: "quick", label: "Quick", hint: "one model, ~1¢" },
   { id: "council", label: "Council", hint: "both models + judge, ~2–5¢" },
   { id: "deep", label: "Deep", hint: "critique + verify, ~5–15¢" },
@@ -49,7 +50,7 @@ type ChatEntry = {
 
 export default function AskPage() {
   const [input, setInput] = useState("");
-  const [mode, setMode] = useState<string>("council");
+  const [mode, setMode] = useState<string>("auto");
   const [entries, setEntries] = useState<ChatEntry[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
