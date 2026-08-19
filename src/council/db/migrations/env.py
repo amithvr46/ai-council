@@ -1,22 +1,27 @@
-import os
+import sys
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from council.db.models import Base
+from council.db.session import mask_url, sync_database_url
 
 config = context.config
 
-# Alembic runs sync, so the async driver in DATABASE_URL has to be swapped for
-# its sync equivalent. Both drivers matter: Postgres in production, SQLite for
-# local development — `alembic upgrade head` against a sqlite+aiosqlite URL
-# otherwise dies with a MissingGreenlet error that says nothing useful.
-url = (
-    os.environ.get("DATABASE_URL", "postgresql+asyncpg://council:council@localhost:5432/council")
-    .replace("+asyncpg", "+psycopg")
-    .replace("+aiosqlite", "+pysqlite")
-)
+# Resolved through the app's own settings, so a DATABASE_URL in .env is
+# honoured. Reading os.environ directly ignored .env, silently fell back to the
+# Postgres default, and left `alembic upgrade head` hanging against a database
+# that was never running — with no message explaining why.
+#
+# The sync driver swap matters for both backends: Postgres in production,
+# SQLite locally, where an aiosqlite URL otherwise dies with an unhelpful
+# MissingGreenlet error.
+url = sync_database_url()
 config.set_main_option("sqlalchemy.url", url)
+
+# Printed so a misconfigured database is visible immediately rather than as a
+# silent hang. Credentials are masked.
+print(f"alembic: {mask_url(url)}", file=sys.stderr)
 
 target_metadata = Base.metadata
 

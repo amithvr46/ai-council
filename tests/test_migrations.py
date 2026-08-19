@@ -62,3 +62,40 @@ def test_full_chain_applies_to_sqlite(tmp_path):
     assert "outcome_kind" in columns("requests")
     # 0009: routing statistics must never mix data populations.
     assert "data_class" in columns("requests")
+
+
+def test_alembic_resolves_the_url_from_settings_not_raw_environment(monkeypatch, tmp_path):
+    """The bug this guards: env.py read os.environ directly, so a DATABASE_URL
+    set in .env was ignored. Alembic silently fell back to the Postgres default
+    and hung against a database that was never running."""
+    import council.config
+    from council.db.session import sync_database_url
+
+    council.config.get_settings.cache_clear()
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("DATABASE_URL=sqlite+aiosqlite:///./from-dotenv.db\n")
+
+    resolved = sync_database_url()
+    council.config.get_settings.cache_clear()
+
+    assert "from-dotenv.db" in resolved
+    # Async drivers are swapped for their sync equivalents; Alembic runs sync.
+    assert "+aiosqlite" not in resolved
+    assert "+pysqlite" in resolved
+
+
+def test_the_postgres_driver_is_swapped_too():
+    from council.db.session import sync_database_url
+
+    assert sync_database_url("postgresql+asyncpg://u:p@host/db").startswith(
+        "postgresql+psycopg://"
+    )
+
+
+def test_credentials_are_masked_before_being_printed():
+    from council.db.session import mask_url
+
+    masked = mask_url("postgresql+psycopg://council:secret@localhost:5432/council")
+    assert "secret" not in masked
+    assert "localhost:5432/council" in masked
