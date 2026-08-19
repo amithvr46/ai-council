@@ -82,7 +82,7 @@ def ingest(
     path: str,
     authority: str = typer.Option(
         "supporting",
-        help="profile | master_resume | supporting | tailored_resume | jd",
+        help="profile | user_statement | master_resume | supporting | tailored_resume | jd",
     ),
     title: str = typer.Option("", help="Display name; defaults to the filename"),
 ):

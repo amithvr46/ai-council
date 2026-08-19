@@ -441,7 +441,7 @@ async def rate(request_id: str, body: RateBody):
 # -------------------------------------------------------------- documents
 
 
-_AUTHORITY_PATTERN = "^(profile|master_resume|supporting|tailored_resume|jd)$"
+_AUTHORITY_PATTERN = "^(profile|user_statement|master_resume|supporting|tailored_resume|jd)$"
 
 # Module-level singletons: FastAPI needs these as defaults, and ruff's B008
 # rightly objects to calling them inline.

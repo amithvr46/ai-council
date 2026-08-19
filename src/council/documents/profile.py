@@ -23,8 +23,21 @@ AUTHORITY_SUPPORTING = "supporting"  # notes, project docs, certificates
 AUTHORITY_TAILORED_RESUME = "tailored_resume"  # selective view, never negative
 AUTHORITY_JD = "jd"  # the target, NOT career evidence
 
+# The user speaking directly about their own career: "I have professional
+# Harness experience." Authoritative — the person is the primary source on what
+# they have done — but kept DISTINCT from document-derived evidence so the
+# sources map can answer "who established this?" honestly.
+#
+# Recorded now purely so provenance exists when Phase 3 captures such
+# statements from natural language. No user-facing workflow writes it yet, and
+# deliberately so: a durable career fact and a request-only instruction
+# ("emphasise AKS", "keep it to two pages") are different things, and telling
+# them apart is intent understanding, which belongs with Auto.
+AUTHORITY_USER_STATEMENT = "user_statement"
+
 CAREER_AUTHORITIES = (
     AUTHORITY_PROFILE,
+    AUTHORITY_USER_STATEMENT,
     AUTHORITY_MASTER_RESUME,
     AUTHORITY_SUPPORTING,
     AUTHORITY_TAILORED_RESUME,

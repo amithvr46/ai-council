@@ -16,6 +16,7 @@ from council.documents.profile import (
     AUTHORITY_MASTER_RESUME,
     AUTHORITY_PROFILE,
     AUTHORITY_TAILORED_RESUME,
+    AUTHORITY_USER_STATEMENT,
     CareerProfile,
     assemble_confirmed,
     detect_role_family,
@@ -435,3 +436,60 @@ def test_key_vault_does_not_confirm_hashicorp_vault():
     )
     assert confirmed.is_confirmed("key vault")
     assert not confirmed.is_confirmed("hashicorp vault")
+
+
+# ------------------------------------------- user statements as provenance
+
+
+def test_user_statement_is_a_career_authority_distinct_from_documents():
+    """The user is the primary source on their own career. Their statement
+    confirms exactly like a document does — but the sources map must still say
+    which one established the term, because 'you told us' and 'your resume says
+    so' are different provenance."""
+    confirmed = assemble_confirmed(
+        CareerProfile(technologies=[], domains=[]),
+        [
+            {
+                "authority": AUTHORITY_USER_STATEMENT,
+                "title": "stated",
+                "text": "I have professional Harness and Argo CD experience.",
+            },
+            {
+                "authority": AUTHORITY_MASTER_RESUME,
+                "title": "master",
+                "text": "Terraform across Azure environments.",
+            },
+        ],
+    )
+    assert confirmed.is_confirmed("harness")
+    assert confirmed.is_confirmed("argo cd")
+    assert any(s.startswith("user_statement:") for s in confirmed.sources["harness"])
+    assert any(s.startswith("master_resume:") for s in confirmed.sources["terraform"])
+    # Provenance is not collapsed: a user statement never masquerades as a
+    # document, and vice versa.
+    assert not any(s.startswith("master_resume:") for s in confirmed.sources["harness"])
+
+
+def test_a_user_statement_never_subtracts_either():
+    """Every career authority is additive. Saying one thing does not retract
+    what another source established."""
+    documents = [
+        {
+            "authority": AUTHORITY_MASTER_RESUME,
+            "title": "master",
+            "text": "Jenkins pipelines and Splunk dashboards.",
+        },
+        {"authority": AUTHORITY_USER_STATEMENT, "title": "stated", "text": "I use Harness."},
+    ]
+    confirmed = assemble_confirmed(CareerProfile(technologies=[], domains=[]), documents)
+    assert {"jenkins", "splunk", "harness"} <= confirmed.terms
+
+
+def test_a_jd_is_still_not_a_user_statement():
+    """Adding a new career authority must not weaken the one rule that keeps
+    the JD out."""
+    confirmed = assemble_confirmed(
+        CareerProfile(technologies=[], domains=[]),
+        [{"authority": AUTHORITY_JD, "title": "target", "text": "Requires Harness."}],
+    )
+    assert not confirmed.is_confirmed("harness")
