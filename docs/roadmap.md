@@ -251,9 +251,51 @@ on spend.
 - **Additional providers** (Gemini, local models) — pointless until Auto has
   data on which model is better at what
 - **Vector DB / RAG** — the evidence layer already covers retrieval
-- **Image input, mobile, multi-user auth, fine-tuning, Kubernetes deployment
-  of AI Council itself, performance/scaling work** — one user
+- **Mobile, multi-user auth, fine-tuning, Kubernetes deployment of AI Council
+  itself, performance/scaling work** — one user
 - **Any redesign of the V1 engine** to accommodate later phases — extend it
+
+---
+
+## Deliberately deferred (evaluated, not abandoned)
+
+### Multimodal / screenshot input — deferred 2026-08-19
+
+Evaluated before Phase 3 and deferred on the evidence, with the expansion path
+kept clean.
+
+**Why not now.** The plumbing genuinely is small: both providers pass messages
+through nearly verbatim, so images need a neutral text+image representation
+translated per vendor in the provider layer. But there is no verified outcome
+waiting to consume it. The motivating case — "Terraform screenshot + error ->
+diagnosis + corrected code" — is a troubleshooting/code-fix outcome needing its
+own truth boundary (does the corrected config actually plan cleanly?).
+Delivered before that boundary exists, a screenshot lands in `question_answer`
+and produces a chat reply with a picture attached. That is "better chat", which
+the product thesis explicitly rejects as the objective.
+
+The decisive criterion was **future rework avoided: none.** `outcome_kind` was
+taken early precisely because intent cannot be reconstructed later. Multimodal
+has no equivalent property — nothing about building it after Auto is harder
+than building it now, and Auto will indicate which outcome should consume it.
+
+**Screenshots are a higher-risk input class.** Every input handled today is
+deliberately curated — a resume, a JD. A screenshot captures whatever was on
+screen: credentials in a terminal, connection strings, subscription and account
+identifiers, internal hostnames, third-party names in an adjacent window. It
+then leaves for an external API. This is the first input class where the user
+cannot reliably know what they are transmitting, so the eventual design must
+treat it accordingly: transmission stays deliberate and visible, and
+preview/redaction/privacy controls are part of the design rather than a later
+addition. This constraint carries forward and is not reopened lightly.
+
+**Expansion path preserved.** The provider contract stays `generate()`-only and
+the message shape is unchanged, so adding images later touches the provider
+layer alone. No capability flag or dead scaffolding was added in the meantime —
+unused code that looks like a feature is worse than an honest gap.
+
+**Revisit when** a real outcome needs it (troubleshooting, Code Workspace), or
+earlier if post-Auto real usage demonstrates the value.
 
 ---
 
