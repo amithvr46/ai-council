@@ -205,11 +205,14 @@ async def save_artifact(
     cost_usd: float,
     file_path: str = "",
 ) -> str:
+    from council import outcomes
     from council.db.models import ArtifactRow
 
     async with session_scope() as s:
         row = ArtifactRow(
-            kind=kind,
+            # Same vocabulary as requests.outcome_kind, so Auto can read intent
+            # across both tables without a translation layer.
+            kind=outcomes.normalise(kind),
             jd_document_id=jd_document_id,
             role_family=role_family,
             title=title,

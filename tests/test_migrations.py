@@ -58,3 +58,5 @@ def test_full_chain_applies_to_sqlite(tmp_path):
     assert {"technologies", "domains", "roles", "employers"} <= columns("career_profile")
     # The foreign key added in 0003, which is what broke on SQLite.
     assert "conversation_id" in columns("requests")
+    # 0008: intent alongside processing mode.
+    assert "outcome_kind" in columns("requests")

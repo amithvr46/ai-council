@@ -47,6 +47,10 @@ class Request(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     question: Mapped[str] = mapped_column(Text)
     mode: Mapped[str] = mapped_column(String(16))  # quick | council | deep
+    # WHAT the user wanted accomplished, as opposed to HOW it was processed.
+    # Plain string, indexed, nullable: adding a workflow must never need a
+    # migration. Vocabulary lives in council/outcomes.py.
+    outcome_kind: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="received")
     # received -> routed -> candidates_complete -> checked -> synthesized/
     # disagreement_reported -> complete | failed

@@ -19,6 +19,7 @@ import time
 
 from sqlalchemy import func, select
 
+from council import outcomes
 from council.db.models import ClaimAssessmentRow, EvidenceItemRow, Request, Step
 from council.db.session import session_scope
 from council.engine.assessor_guards import blind_claims, sanitize
@@ -126,12 +127,16 @@ class CouncilEngine:
     # ------------------------------------------------------------------ run
 
     async def create(
-        self, question: str, mode: str, conversation_id: str | None = None
+        self,
+        question: str,
+        mode: str,
+        conversation_id: str | None = None,
+        outcome_kind: str = outcomes.QUESTION_ANSWER,
     ) -> str:
         """Create the request row up front so callers can subscribe to its
         event stream before execution starts (async API path)."""
         BudgetTracker(mode)  # validate mode before persisting anything
-        return await self._create_request(question, mode, conversation_id)
+        return await self._create_request(question, mode, conversation_id, outcome_kind)
 
     async def run(
         self,
@@ -139,6 +144,7 @@ class CouncilEngine:
         mode: str,
         request_id: str | None = None,
         history: list[dict[str, str]] | None = None,
+        outcome_kind: str = outcomes.QUESTION_ANSWER,
     ) -> dict:
         """history: optional prior turns of the conversation as chat messages
         ([{role: user|assistant, content: ...}]); candidates see them so
@@ -155,7 +161,7 @@ class CouncilEngine:
             raise BudgetRefused(decision)
 
         if request_id is None:
-            request_id = await self._create_request(question, mode, None)
+            request_id = await self._create_request(question, mode, None, outcome_kind)
         if decision.warning:
             await self._record_stage(
                 request_id, 0, "budget_warning", decision.as_dict()
@@ -1021,11 +1027,19 @@ class CouncilEngine:
     # ------------------------------------------------------------ persistence
 
     async def _create_request(
-        self, question: str, mode: str, conversation_id: str | None = None
+        self,
+        question: str,
+        mode: str,
+        conversation_id: str | None = None,
+        outcome_kind: str = outcomes.QUESTION_ANSWER,
     ) -> str:
         async with session_scope() as s:
             req = Request(
-                question=question, mode=mode, status="routed", conversation_id=conversation_id
+                question=question,
+                mode=mode,
+                status="routed",
+                conversation_id=conversation_id,
+                outcome_kind=outcomes.normalise(outcome_kind),
             )
             s.add(req)
             await s.flush()
@@ -1181,6 +1195,7 @@ class CouncilEngine:
                 "id": req.id,
                 "question": req.question,
                 "mode": req.mode,
+                "outcome_kind": req.outcome_kind,
                 "status": req.status,
                 "final_answer": req.final_answer,
                 "degraded": req.degraded,
