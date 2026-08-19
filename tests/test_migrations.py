@@ -60,3 +60,5 @@ def test_full_chain_applies_to_sqlite(tmp_path):
     assert "conversation_id" in columns("requests")
     # 0008: intent alongside processing mode.
     assert "outcome_kind" in columns("requests")
+    # 0009: routing statistics must never mix data populations.
+    assert "data_class" in columns("requests")

@@ -41,7 +41,7 @@ async def _ensure_schema():
 @app.command()
 def ask(
     question: str,
-    mode: str = typer.Option("council", help="quick | council | deep"),
+    mode: str = typer.Option("auto", help="auto | quick | council | deep"),
     trace: bool = typer.Option(False, help="Print the full execution trace as JSON"),
 ):
     """Ask the council a question."""
@@ -75,6 +75,27 @@ def show(request_id: str):
         return await engine.get_request(request_id)
 
     typer.echo(json.dumps(asyncio.run(_run()), indent=2, default=str))
+
+
+@app.command("routing-report")
+def routing_report(
+    data_class: str = typer.Option(
+        "real", help="real | eval | synthetic — populations are never mixed"
+    ),
+):
+    """How Auto's routing is actually performing, per outcome and mode.
+
+    Only one population at a time, deliberately: synthetic rows must never
+    reach routing statistics, and a benchmark sweep is not evidence of real
+    usage.
+    """
+    from council.engine.routing_report import collect, render
+
+    async def _run():
+        await _ensure_schema()
+        return await collect(data_class)
+
+    typer.echo(render(asyncio.run(_run()), data_class))
 
 
 @app.command()

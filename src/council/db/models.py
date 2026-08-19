@@ -51,6 +51,12 @@ class Request(Base):
     # Plain string, indexed, nullable: adding a workflow must never need a
     # migration. Vocabulary lives in council/outcomes.py.
     outcome_kind: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # Which population this row belongs to. Routing statistics must never mix
+    # organic usage with deliberate benchmark runs, and must never be able to
+    # consume synthetic rows at all. Default "real"; the eval runner stamps
+    # "eval"; "synthetic" exists so a fabricated row is self-identifying if one
+    # ever reaches a real database.
+    data_class: Mapped[str] = mapped_column(String(16), default="real", index=True)
     status: Mapped[str] = mapped_column(String(32), default="received")
     # received -> routed -> candidates_complete -> checked -> synthesized/
     # disagreement_reported -> complete | failed

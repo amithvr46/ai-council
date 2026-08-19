@@ -9,7 +9,7 @@ from council.providers.anthropic_provider import AnthropicProvider
 from council.providers.openai_provider import OpenAIProvider
 
 
-def build_engine() -> CouncilEngine:
+def build_engine(data_class: str = "real") -> CouncilEngine:
     s = get_settings()
     # Empty keys get a placeholder so the app can boot without credentials;
     # the first live call then fails loudly with an auth error, which the
@@ -25,6 +25,7 @@ def build_engine() -> CouncilEngine:
     return CouncilEngine(
         providers,
         default_registry(),
+        data_class=data_class,
         flagship_models={
             "openai": s.openai_model_flagship,
             "anthropic": s.anthropic_model_flagship,

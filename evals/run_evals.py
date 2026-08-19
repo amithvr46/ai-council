@@ -43,7 +43,7 @@ async def main() -> None:
     init_engine()
     async with get_engine().begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    engine = build_engine()
+    engine = build_engine(data_class="eval")
 
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     outdir = ROOT / "evals" / "results" / stamp

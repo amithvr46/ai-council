@@ -25,6 +25,7 @@ from council.db.session import session_scope
 from council.engine.assessor_guards import blind_claims, sanitize
 from council.engine.budget import BudgetTracker
 from council.engine.prompts import PromptRegistry
+from council.engine.routing import MODES, RoutingDecision, decide
 from council.engine.schemas import (
     CombinedCheck,
     Critique,
@@ -55,6 +56,7 @@ class CouncilEngine:
         evidence_tools: dict | None = None,
         max_web_searches: int = 3,
         max_code_executions: int = 2,
+        data_class: str = "real",
     ):
         self.providers = providers
         self.registry = registry
@@ -67,6 +69,10 @@ class CouncilEngine:
         self.evidence_tools = evidence_tools or {}
         self.max_web_searches = max_web_searches
         self.max_code_executions = max_code_executions
+        # Which population this engine's rows belong to (real | eval |
+        # synthetic). Set once at construction so a benchmark run cannot
+        # accidentally write rows that look like organic usage.
+        self.data_class = data_class
         self._cancel_started: dict[str, float] = {}
         # Provider calls that have been initiated but not yet returned. If a
         # request is cancelled mid-flight these are persisted as interrupted
@@ -126,17 +132,66 @@ class CouncilEngine:
 
     # ------------------------------------------------------------------ run
 
+    # ------------------------------------------------------------- routing
+
+    async def plan(
+        self, question: str, mode: str, outcome_kind: str = outcomes.QUESTION_ANSWER
+    ) -> RoutingDecision:
+        """Resolve 'auto' to a concrete mode. Costs zero model calls.
+
+        Rung 0 first: an explicit mode is always obeyed. Auto never overrides a
+        choice the user actually made.
+        """
+        if mode != "auto":
+            return RoutingDecision(mode, "explicit", "user chose this mode explicitly")
+
+        # Rung 2: a mode that cannot complete inside the remaining budget is
+        # removed from the candidate set rather than attempted and abandoned.
+        affordable = []
+        for candidate in MODES:
+            spend_decision = await check_affordable(candidate)
+            if spend_decision.allowed:
+                affordable.append(candidate)
+
+        return decide(
+            question,
+            affordable=affordable,
+            # A single configured provider cannot produce a second opinion, so
+            # council would be council in name only.
+            degraded_providers=len(self.providers) < 2,
+        )
+
+    async def _resolve_mode(
+        self, question: str, mode: str, outcome_kind: str, routing: RoutingDecision | None
+    ) -> tuple[str, RoutingDecision | None]:
+        """Returns (concrete_mode, decision_to_record).
+
+        A decision passed in by the caller is reused rather than recomputed, so
+        the API path routes exactly once across create() and run().
+        """
+        if routing is not None:
+            return routing.mode, routing
+        if mode != "auto":
+            return mode, None
+        decision = await self.plan(question, mode, outcome_kind)
+        return decision.mode, decision
+
     async def create(
         self,
         question: str,
         mode: str,
         conversation_id: str | None = None,
         outcome_kind: str = outcomes.QUESTION_ANSWER,
+        routing: RoutingDecision | None = None,
     ) -> str:
         """Create the request row up front so callers can subscribe to its
         event stream before execution starts (async API path)."""
+        mode, decision = await self._resolve_mode(question, mode, outcome_kind, routing)
         BudgetTracker(mode)  # validate mode before persisting anything
-        return await self._create_request(question, mode, conversation_id, outcome_kind)
+        request_id = await self._create_request(question, mode, conversation_id, outcome_kind)
+        if decision is not None:
+            await self._record_routing(request_id, decision)
+        return request_id
 
     async def run(
         self,
@@ -145,11 +200,17 @@ class CouncilEngine:
         request_id: str | None = None,
         history: list[dict[str, str]] | None = None,
         outcome_kind: str = outcomes.QUESTION_ANSWER,
+        routing: RoutingDecision | None = None,
     ) -> dict:
         """history: optional prior turns of the conversation as chat messages
         ([{role: user|assistant, content: ...}]); candidates see them so
         follow-up questions work. Later stages audit only the current turn."""
         started = time.monotonic()
+        # Routing resolves before anything is spent or persisted, and costs
+        # zero model calls.
+        mode, routing_decision = await self._resolve_mode(
+            question, mode, outcome_kind, routing
+        )
         budget = BudgetTracker(mode)
 
         # Forward affordability: refuse BEFORE starting work that cannot be
@@ -162,6 +223,8 @@ class CouncilEngine:
 
         if request_id is None:
             request_id = await self._create_request(question, mode, None, outcome_kind)
+            if routing_decision is not None:
+                await self._record_routing(request_id, routing_decision)
         if decision.warning:
             await self._record_stage(
                 request_id, 0, "budget_warning", decision.as_dict()
@@ -1040,10 +1103,20 @@ class CouncilEngine:
                 status="routed",
                 conversation_id=conversation_id,
                 outcome_kind=outcomes.normalise(outcome_kind),
+                data_class=self.data_class,
             )
             s.add(req)
             await s.flush()
             return req.id
+
+    async def _record_routing(self, request_id: str, decision: RoutingDecision) -> None:
+        """A zero-cost step: no provider, no model, no tokens.
+
+        Recorded even when the mode was explicit, so every request carries the
+        answer to "why was it run this way?" rather than only the routed ones.
+        """
+        await self._record_stage(request_id, 0, "routing", decision.as_dict())
+        self._emit(request_id, {"type": "routing", **decision.as_dict()})
 
     async def _record_call(
         self, request_id, seq, stage, resp: ModelResponse, prompt_version, output=None

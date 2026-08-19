@@ -78,7 +78,7 @@ async def unhandled_error(request, exc):
 
 class AskBody(BaseModel):
     question: str = Field(min_length=1)
-    mode: str = Field(default="council", pattern="^(quick|council|deep)$")
+    mode: str = Field(default="council", pattern="^(auto|quick|council|deep)$")
     conversation_id: str | None = None
 
 
@@ -143,19 +143,27 @@ async def ask(body: AskBody):
 async def ask_async(body: AskBody):
     """Returns the request + conversation ids immediately; subscribe to
     /requests/{id}/stream for live stage events."""
+    # Route once, then reuse the decision for both create() and run() so the
+    # request is not routed twice and cannot be routed inconsistently.
+    routing = await engine.plan(body.question, body.mode)
+
     # Check affordability before creating anything, so a refused request
     # leaves no orphan conversation or request row behind.
-    decision = await check_affordable(body.mode)
+    decision = await check_affordable(routing.mode)
     if not decision.allowed:
         raise HTTPException(status_code=402, detail=decision.as_dict())
 
     conversation_id = await _ensure_conversation(body)
     history = await _conversation_history(conversation_id)
-    request_id = await engine.create(body.question, body.mode, conversation_id)
+    request_id = await engine.create(
+        body.question, routing.mode, conversation_id, routing=routing
+    )
 
     async def _run():
         try:
-            await engine.run(body.question, body.mode, request_id=request_id, history=history)
+            await engine.run(
+                body.question, routing.mode, request_id=request_id, history=history
+            )
         except asyncio.CancelledError:
             # User pressed stop: mark the request and tell subscribers.
             await engine.mark_cancelled(request_id)
