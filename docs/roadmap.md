@@ -11,6 +11,10 @@ require a real defect or a stated change of goals.
 
 ---
 
+> Permanent product and engineering principles live in
+> [principles.md](principles.md) and outrank this document. Where the roadmap
+> and the principles conflict, the roadmap is wrong.
+
 ## Organising principle
 
 The four goals differ enormously in cost and in urgency, and one has a

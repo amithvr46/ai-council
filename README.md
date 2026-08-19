@@ -4,6 +4,14 @@ A personal multi-model AI system. GPT and Claude answer every question independe
 
 Core principle: **evidence outranks model opinion, and no uncontrolled loops.**
 
+The product thesis is **outcome orchestration rather than model orchestration**:
+the models underneath are infrastructure and will change, and what the system
+owns is understanding the desired outcome, doing the work, verifying it and
+returning the finished result. Permanent product and engineering principles —
+including the human authorisation boundary that governs autonomy — are in
+[docs/principles.md](docs/principles.md); they outrank any individual phase
+document.
+
 ## Pipeline (V1)
 
 ```
