@@ -200,10 +200,13 @@ class ConfirmedExperience:
         return [t for t in terms if not self.is_confirmed(t)]
 
 
-def _mentions(text: str, term: str) -> bool:
+def mentions(text: str, term: str) -> bool:
     """Whole-term match, tolerant of punctuation but not of substrings —
     'go' must not match 'going', 'git' must not match 'github'."""
     return re.search(rf"(?<![\w-]){re.escape(term)}(?![\w-])", text, re.I) is not None
+
+
+_mentions = mentions  # internal callers
 
 
 def assemble_confirmed(

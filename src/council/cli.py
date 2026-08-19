@@ -14,8 +14,20 @@ from council.documents.profile import (
     detect_role_family,
     scan_jd_technologies,
 )
-from council.documents.store import career_documents, load_profile, save_profile, store_document
-from council.engine.factory import build_engine
+from council.documents.render import render_docx
+from council.documents.store import (
+    career_documents,
+    list_conflicts,
+    load_discovery_cache,
+    load_profile,
+    resolve_conflict,
+    save_artifact,
+    save_conflicts,
+    save_discovery_cache,
+    save_profile,
+    store_document,
+)
+from council.engine.factory import build_engine, build_resume_workflow
 
 app = typer.Typer(help="AI Council — ask once, get one verified answer.")
 
@@ -196,6 +208,118 @@ def analyze_jd(path: str):
             "not claim these. Add real experience with `council profile-set` if any "
             "of them belong."
         )
+
+
+@app.command("generate-resume")
+def generate_resume(
+    jd_path: str,
+    out: str = typer.Option("resume.docx", help="Output DOCX path"),
+    name: str = typer.Option("", help="Your name for the header"),
+    contact: str = typer.Option("", help="Contact line for the header"),
+    trace: bool = typer.Option(False, help="Print the full internal trace"),
+):
+    """Career sources + JD -> submission-ready DOCX.
+
+    You do not pick models, modes, keywords or review stages (contract A12).
+    """
+    file = Path(jd_path).expanduser()
+    if not file.is_file():
+        typer.echo(f"no such file: {file}", err=True)
+        raise typer.Exit(2)
+
+    async def _run():
+        await _ensure_schema()
+        try:
+            jd = extract(file.name, file.read_bytes())
+        except ExtractionError as e:
+            typer.echo(f"cannot read {file.name}: {e}", err=True)
+            raise typer.Exit(1) from None
+
+        p = await load_profile()
+        documents = await career_documents()
+        cache = await load_discovery_cache()
+        workflow = build_resume_workflow()
+        result = await workflow.run(jd.text, p, documents, cache=cache)
+        await save_discovery_cache(cache)
+        await save_conflicts(result.analysis.conflicts)
+        path = render_docx(result.draft, out, name=name, contact=contact)
+        await save_artifact(
+            kind="resume_tailor",
+            jd_document_id=None,
+            role_family=result.analysis.role_family,
+            title=file.stem,
+            content=result.draft.model_dump(),
+            trace={
+                "analysis": result.analysis.as_dict(),
+                "review": result.review.model_dump() if result.review else None,
+                "findings": result.findings,
+                **result.trace.as_dict(),
+            },
+            cost_usd=result.trace.cost_usd,
+            file_path=str(path),
+        )
+        return result, path
+
+    result, path = asyncio.run(_run())
+    typer.echo(f"wrote {path}")
+    typer.echo(
+        f"role family: {result.analysis.role_family} | "
+        f"{result.trace.model_calls} model calls | ${result.trace.cost_usd:.4f}"
+    )
+    if result.analysis.gaps:
+        typer.echo(f"gaps not claimed: {', '.join(result.analysis.gaps)}")
+    if result.analysis.conflicts:
+        typer.echo(
+            f"{len(result.analysis.conflicts)} unresolved source conflict(s) — "
+            "those facts were withheld. Run `council conflicts` to see them."
+        )
+    if result.findings:
+        typer.echo(f"\n{len(result.findings)} finding(s) survived correction:")
+        for f in result.findings:
+            typer.echo(f"  [{f['class']}] {f['location']}: {'; '.join(f['reasons'])}")
+    if result.review is not None:
+        typer.echo(f"\nwould submit: {result.review.would_submit}")
+    if trace:
+        typer.echo(json.dumps(result.as_dict(), indent=2, default=str))
+
+
+@app.command()
+def conflicts():
+    """Material factual disagreements between your career sources.
+
+    These are not wording differences. Until one is resolved the disputed fact
+    is withheld from generated documents rather than guessed at.
+    """
+
+    async def _run():
+        await _ensure_schema()
+        return await list_conflicts()
+
+    rows = asyncio.run(_run())
+    if not rows:
+        typer.echo("no unresolved conflicts")
+        return
+    for row in rows:
+        values = " vs ".join(sorted({v["value"] for v in row["values"] or []}))
+        typer.echo(f"[{row['kind']}] {row['subject']}")
+        typer.echo(f"    {values}")
+        for v in row["values"] or []:
+            typer.echo(f"      {v['value']}  <-  {v['source']}")
+        typer.echo(f"    resolve with: council resolve-conflict {row['id']} \"<value>\"")
+
+
+@app.command("resolve-conflict")
+def resolve_conflict_cmd(conflict_id: str, value: str):
+    """Settle a disputed fact so documents can state it again."""
+
+    async def _run():
+        await _ensure_schema()
+        return await resolve_conflict(conflict_id, value)
+
+    if not asyncio.run(_run()):
+        typer.echo(f"no conflict with id {conflict_id}", err=True)
+        raise typer.Exit(2)
+    typer.echo(f"resolved: {value}")
 
 
 if __name__ == "__main__":

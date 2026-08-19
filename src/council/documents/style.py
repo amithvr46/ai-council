@@ -135,6 +135,28 @@ def check(text: str, rules: list[StyleRule] | None = None) -> dict[str, list[str
     return findings
 
 
+def enforce_comma_rule(text: str) -> str:
+    """Delete a comma placed immediately before 'and'.
+
+    Applied mechanically rather than asked of the correction model. A live run
+    showed the model leaving one in place even with the violation quoted back
+    to it — and this rule has exactly one correct answer, so a regex is both
+    more reliable and free. Quoted and fenced text is preserved, since keeping
+    a source verbatim outranks house style.
+    """
+    fences: list[str] = []
+
+    def _stash(match: re.Match) -> str:
+        fences.append(match.group(0))
+        return f"\x00{len(fences) - 1}\x00"
+
+    stashed = re.sub(r"```.*?```|\"[^\"]*\"|'[^']*'", _stash, text, flags=re.S)
+    fixed = re.sub(r"(\w),(\s+and\b)", r"\1\2", stashed, flags=re.I)
+    for index, original in enumerate(fences):
+        fixed = fixed.replace(f"\x00{index}\x00", original)
+    return fixed
+
+
 def blocking_violations(text: str, rules: list[StyleRule] | None = None) -> dict[str, list[str]]:
     rules = rules or DEFAULT_RULES
     blocking = {r.id for r in rules if r.blocking}

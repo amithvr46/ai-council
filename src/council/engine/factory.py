@@ -41,3 +41,37 @@ def build_engine() -> CouncilEngine:
         max_web_searches=s.max_web_searches,
         max_code_executions=s.max_code_executions,
     )
+
+
+def build_resume_workflow():
+    """The Phase 2C artifact workflow.
+
+    The draft and the review deliberately sit on different providers: a model
+    reviewing its own writing rates it generously, which is the same reason the
+    council pipeline puts the verifier on the opposite provider.
+    """
+    from council.documents.workflow import ResumeWorkflow
+
+    s = get_settings()
+    providers = {
+        "openai": OpenAIProvider(s.openai_api_key or "unset", timeout=s.request_timeout_seconds),
+        "anthropic": AnthropicProvider(
+            s.anthropic_api_key or "unset", timeout=s.request_timeout_seconds
+        ),
+    }
+    draft_provider = s.judge_provider if s.judge_provider in providers else "anthropic"
+    review_provider = "openai" if draft_provider == "anthropic" else "anthropic"
+    return ResumeWorkflow(
+        providers,
+        default_registry(),
+        draft_provider=draft_provider,
+        review_provider=review_provider,
+        flagship_models={
+            "openai": s.openai_model_flagship,
+            "anthropic": s.anthropic_model_flagship,
+        },
+        cheap_models={
+            "openai": s.openai_model_cheap,
+            "anthropic": s.anthropic_model_cheap,
+        },
+    )

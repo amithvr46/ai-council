@@ -131,6 +131,61 @@ _ROUTINE_WORK = re.compile(
 )
 
 
+# --- Tier 2B, second half: invented relationships ---------------------------
+# Contract Amendment A5. Confirmed AWS + Terraform + Kubernetes + Python does
+# NOT establish "Built Kubernetes clusters on AWS using Terraform and automated
+# the entire platform through Python". Every noun is confirmed; the specific
+# historical relationship between them may be invented. Classification must ask
+# two questions, not one — hence this check, which looks at how technologies are
+# bound together rather than at whether each is confirmed.
+
+_BINDING_VERBS = re.compile(
+    rf"\b(?:{_CREATION_VERBS}|integrat(?:ed|ing)|migrat(?:ed|ing)|"
+    r"consolidat(?:ed|ing)|re-?platform(?:ed|ing)|standardi[sz](?:ed|ing)|"
+    r"automat(?:ed|ing))\b",
+    re.I,
+)
+
+# Totalising scope: the difference between describing work and claiming an
+# entire estate. "the entire platform" is a bigger claim than "the platform".
+_TOTALISING_SCOPE = re.compile(
+    r"\b(?:entire|whole|all(?: of)?|complete|end-to-end|full|every)\b[^.]{0,30}?"
+    r"\b(?:platform|infrastructure|environment|estate|stack|architecture|"
+    r"landscape|footprint|ecosystem|system|pipeline|deployment|migration|"
+    r"organi[sz]ation|company|enterprise)\b",
+    re.I,
+)
+
+# How many distinct technologies one sentence may bind under a creation verb
+# before it stops being a description of routine work and becomes a claim about
+# a specific thing that was built. Three is the threshold: "Built pipelines in
+# Azure DevOps" is ordinary, "Built X on Y using Z and automated W" is a story.
+_RELATIONSHIP_TECH_THRESHOLD = 3
+
+
+def find_relationship_claims(text: str, technologies: list[str]) -> list[str]:
+    """Tier 2B detections based on how technologies are bound together.
+
+    technologies: the technical terms this statement mentions, confirmed or
+    not. Confirmation status is deliberately irrelevant here — the whole point
+    is that confirmed nouns do not license an invented relationship.
+    """
+    findings: list[str] = []
+    distinct = {t.lower() for t in technologies if t}
+
+    if _TOTALISING_SCOPE.search(text):
+        findings.append("totalising_scope")
+
+    if (
+        len(distinct) >= _RELATIONSHIP_TECH_THRESHOLD
+        and _BINDING_VERBS.search(text)
+        and not _ROUTINE_WORK.search(text)
+    ):
+        findings.append("multi_technology_relationship")
+
+    return findings
+
+
 @dataclass
 class ClaimFinding:
     text: str
@@ -149,8 +204,20 @@ def find_hard_facts(text: str) -> list[str]:
     return [name for name, pattern in _HARD_FACT_PATTERNS if pattern.search(scrubbed)]
 
 
+# Product names that collide with leadership/creation vocabulary. "Managed
+# Identity" is an Azure service, not a claim to have managed anything —
+# without this scrub, a truthful bullet about RBAC and Key Vault gets flagged
+# as an ownership claim purely because Microsoft named a product "Managed".
+_PRODUCT_NAME_NOISE = re.compile(
+    r"\bmanaged (?:identit(?:y|ies)|instances?|grafana|prometheus|disks?|"
+    r"clusters?|service identity)\b|\bazure managed\b|\bled display\b",
+    re.I,
+)
+
+
 def find_implementation_claims(text: str) -> list[str]:
     """Tier 2B detections, excluding routine engineering artifacts."""
+    text = _PRODUCT_NAME_NOISE.sub(" ", text)
     if _ROUTINE_WORK.search(text):
         # Routine artifact present: only flag if leadership/ownership language
         # is ALSO present, which routine work does not require.
@@ -188,6 +255,9 @@ def classify(
 
     facts = find_hard_facts(text)
     implementation = find_implementation_claims(text)
+    # Amendment A5: asked independently of confirmation, because confirmed
+    # nouns are exactly what makes an invented relationship look safe.
+    implementation += find_relationship_claims(text, candidate_terms or [])
 
     # Precedence: a fabricated number is the most serious, then an invented
     # project, then an unconfirmed technology.

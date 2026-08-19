@@ -309,3 +309,228 @@ detection; tailored-resume-is-not-negative-evidence; no orchestration
 artifacts in output; bounded review/correction passes; no clarification
 prompt on a resolvable question; expansion permitted when technologies are
 confirmed; fabrication caught when a number is invented.
+
+---
+
+# Amendment A — Phase 2C requirements (frozen 2026-08-19)
+
+Refinements to the contract above, approved after GPT's Phase 2B adversarial
+review returned PASS. These bind on Phase 2C prompts, classifier, workflow and
+acceptance tests.
+
+## A1. Phase 2B structural rules — approved, unchanged
+
+- Career sources contribute positively. A tailored resume omitting Harness,
+  Jenkins or any established technology never removes it from the Career
+  Experience Profile. A tailored resume is a selective representation, not a
+  biography.
+- A JD is the target, never evidence. A JD requiring GCP and GKE with no
+  supporting career evidence yields `GCP → GAP`, `GKE → GAP`. Never
+  "JD mentions GCP, therefore the user has GCP".
+- Parse failures stay explicit. An unreadable document never silently becomes
+  an empty career source.
+
+## A2. Technology discovery — conditional, never confirming
+
+A hand-maintained foreign-technology list goes stale as new tools appear, but
+a model call per JD is waste. The flow is:
+
+    JD
+      → mechanical known-technology extraction
+      → classify known supported/gap technologies locally
+      → inspect remaining unclassified technical terms
+      → ONLY if meaningful unclassified terms remain: ONE cheap
+        structured-output call asking whether they are technologies
+      → compare discovered candidates against career evidence mechanically
+
+**The boundary:** the model may DISCOVER a technology from a JD. It may never
+CONFIRM that the user has experience with it. Confirmation comes only from the
+Career Experience Profile, the master resume, authoritative supporting career
+documents, or information the user explicitly provides.
+
+Discovered terms are cached in normalised form so repeat JDs do not pay to
+rediscover the same vocabulary.
+
+## A3. Conflicting career sources
+
+Authoritative career sources must not silently overwrite one another on
+material hard facts: employer dates, role dates, certification status,
+education, exact achievements, specific historical facts.
+
+On a genuine conflict: persist it, manufacture no certainty, and avoid using
+the disputed fact until resolved. "Latest document wins" is NOT the policy
+unless a future explicit policy establishes it.
+
+This never fires on ordinary Tier 2 wording differences. Only materially
+conflicting facts trigger it.
+
+## A4. Facts are grounded; writing is not copied
+
+The single most important 2C principle:
+
+> AI Council has freedom to formulate realistic professional experience. It
+> does not have freedom to fabricate career facts.
+
+The system is not a sentence extractor that rearranges bullets already present
+in old resumes. Where a technology or domain is established and the target JD
+makes it relevant, the Council formulates natural hands-on wording from the
+confirmed technologies, confirmed domains, confirmed role context, surrounding
+confirmed stack, the JD, ordinary real-world usage of those technologies, and
+its own engineering knowledge. The resulting sentence does not need to exist in
+any prior resume.
+
+The user must not have to say "yes, I configured this" or "yes, I troubleshot
+that" for every normal responsibility. Requiring that would defeat the purpose
+of the system.
+
+## A5. Confirmed tools do not confirm every relationship
+
+The other side of A4. Independently confirmed AWS, Terraform, Kubernetes and
+Python do NOT establish:
+
+> "Built Kubernetes clusters on AWS using Terraform and automated the entire
+> platform through Python."
+
+Every noun is confirmed; the specific historical relationship may be invented.
+Classification must therefore ask two questions, not one:
+
+1. Are the technologies confirmed?
+2. Is the relationship an ordinary reasonable expansion consistent with the
+   role and context, or an invented specific historical implementation?
+
+A bullet is never validated by noun-presence alone.
+
+## A6. Four-level claim policy — interpretation
+
+- **Tier 1 — confirmed fact.** Directly supported: professionally used
+  Terraform, Harness, Azure, Kubernetes; employer; role; established
+  responsibility, certification, project.
+- **Tier 2 — permitted reasonable expansion.** Generated proactively without
+  per-sentence approval: CI/CD configuration and support, deployment and
+  release support, troubleshooting failed deployments, Terraform plans,
+  modules and infrastructure changes, Kubernetes deployment and operations,
+  monitoring and alert investigation, production troubleshooting, scripting
+  and automation, cloud infrastructure changes, security and governance work,
+  observability, operational support, release validation, configuration
+  management. These need not exist verbatim in an old resume.
+- **Tier 2B — specific implementation / project / relationship claim.**
+  Confirmed tools alone do not authorise: a custom Kubernetes operator, a
+  bespoke internal platform, leading a major migration, a custom enterprise
+  framework, enterprise-wide architecture, a named internal product, leading
+  or managing a team, owning an entire architecture, an invented integration
+  between several tools, or any unusual implementation not established by
+  career evidence. These are historical claims even with no numbers in them.
+- **Tier 3 — hard factual claim.** Requires direct support. Never invent
+  percentages, dollar savings, application/server/user counts, team sizes,
+  dates, migration quantities, production scale, performance improvements,
+  named internal initiatives, awards, certifications, business outcomes or
+  unusually specific ownership.
+
+## A7. Core resume principle
+
+> Be conservative about facts but proactive about writing.
+
+Ground career facts strictly. Generate professional wording intelligently.
+Keep ordinary experience expansion flexible. Keep specific historical and
+project claims controlled. Never invent hard facts. Do not become so
+conservative that useful sentences are rejected merely because those exact
+words are absent from an old resume.
+
+## A8. Real-experience writing is a first-class quality target
+
+Not a grammar pass at the end. The generation stage itself targets the voice of
+an experienced engineer describing actual work. Every bullet must pass:
+
+> "Would this sound natural if an experienced Cloud/DevOps/Platform/SRE
+> engineer explained this work to a technical hiring manager?"
+
+Avoid: "leveraged cutting-edge", "spearheaded transformative", "drove
+operational excellence", corporate impact language, generic assistant phrasing,
+keyword stuffing, repetitive structure, every bullet on one formula,
+suspiciously polished wording, vague responsibilities, invented impact.
+
+Prefer: practical implementation language, realistic troubleshooting detail,
+natural sentence variation, accurate terminology, concise human wording, real
+operational context, believable engineer-level responsibility.
+
+Not this:
+
+> "Leveraged Kubernetes to enhance scalability and drive operational
+> excellence."
+
+This:
+
+> "Supported Kubernetes deployments by reviewing rollout status, pod events,
+> resource usage and configuration changes when releases failed or workloads
+> became unhealthy."
+
+The final resume must not look like the JD was pasted into a chatbot.
+
+## A9. Role family drives the writing
+
+Legitimate scope: DevOps Engineering, Azure DevOps, Cloud DevOps, Cloud
+Engineering, Infrastructure Engineering, Cloud Infrastructure, Platform
+Engineering, SRE, Cloud Operations, Production Operations, and closely related
+roles. Same career, different emphasis. The Council identifies the target
+family from the JD and shifts emphasis accordingly (see §2A).
+
+## A10. Optimise limited resume space
+
+Do not simply rewrite the master resume. Per JD: what does this employer care
+about → which parts of the career prove it → what deserves the space → what to
+emphasise, rewrite, combine, shorten or remove → which Tier 2 expansions
+improve the match → is every resulting statement technically defensible.
+
+Omission from the tailored output never alters the Career Experience Profile.
+
+## A11. Internal review standard
+
+Before finalising, evaluate: ATS relevance; recruiter 5–10 second readability;
+hiring-manager technical credibility; interview defensibility; truthfulness;
+experienced-engineer tone; keyword coverage without stuffing; use of limited
+space; realistic phrasing; absence of AI-writing patterns.
+
+Do not optimise for ATS score alone. The resume must survive machine screening
+and a technical human reading it.
+
+## A12. Minimal user involvement
+
+Normal experience stays: career sources + JD → Generate → finished resume. The
+user never orchestrates model choice, mode, keyword selection, bullet
+selection, review stages, verifier choice, ATS review, technical review or
+rewrite decisions. Ask only when missing information is materially necessary
+for truthfulness or quality and cannot be resolved safely from existing career
+evidence. Never ask the user to approve ordinary Tier 2 wording.
+
+## A13. Phase 2C workflow
+
+    Career Profile + master resume / supporting sources + JD
+      → JD analysis
+      → relevant experience selection
+      → intelligent Tier 2 experience formulation
+      → tailored draft
+      → ATS review
+      → recruiter scan review
+      → technical / hiring-manager review
+      → interview-defensibility review
+      → claim and relationship classification
+      → human-writing / style review
+      → bounded correction
+      → final submission-ready DOCX
+
+Internal traces stay available for debugging; the normal path exposes the
+finished result.
+
+## A14. Acceptance test
+
+The real Caveonix Infrastructure Engineer JD is the first adversarial case. It
+is GCP-primary, which makes it a useful hard test. The system must identify
+GCP, GKE, Cloud Run and Cloud SQL as gaps, never manufacture GCP experience,
+still recognise substantial transferable cloud/infrastructure/DevOps
+experience, emphasise confirmed Terraform, infrastructure, Kubernetes, CI/CD,
+automation, production operations, security and networking work, generate
+realistic engineer-level wording, avoid mirroring the JD, and produce a resume
+the user would realistically consider submitting.
+
+The goal is not "match every JD keyword". The goal is the strongest truthful
+and technically defensible representation of this career for this opportunity.

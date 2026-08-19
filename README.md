@@ -88,6 +88,52 @@ in your local database and never enter this repository.
 Same operations over HTTP: `POST /documents` (multipart), `GET/PATCH/DELETE
 /documents`, `GET/PUT /career-profile`, `POST /career-profile/analyze-jd`.
 
+**Phase 2C (complete) — the resume workflow.** Career sources + JD in, a
+submission-ready DOCX out. You do not choose models, modes, keywords, bullets
+or review stages.
+
+```bash
+council generate-resume ~/jd.txt --out tailored.docx --name "Your Name" --contact "City | linkedin"
+council conflicts                      # material factual disagreements between your sources
+council resolve-conflict <id> "value"
+```
+
+    JD analysis -> experience selection -> tailored draft -> multi-lens review
+      -> claim + style checks -> bounded correction -> DOCX
+
+The governing rule, from the frozen contract:
+
+> AI Council has freedom to formulate realistic professional experience. It
+> does not have freedom to fabricate career facts.
+
+So it writes natural engineer-voiced bullets from confirmed technologies,
+domains and role context without needing the exact wording to exist in an old
+resume — while four things are enforced in code rather than asked of a prompt:
+
+- **Gap technologies never appear.** Not in a bullet, not in the skills list.
+  A GCP-primary JD produces a resume with no GCP in it.
+- **Confirmed nouns do not license an invented relationship.** Confirmed AWS,
+  Terraform, Kubernetes and Python do not establish "built Kubernetes clusters
+  on AWS using Terraform and automated the entire platform through Python" —
+  every noun true, the history manufactured. Tier 2B catches it.
+- **Unless a career source actually says it.** A real project the master resume
+  establishes is not flagged as invented; support requires one source sentence
+  to assert substantially the same thing, not words scattered across a file.
+- **Never a comma immediately before "and".** Deterministic rule, applied
+  deterministically after correction rather than trusted to a model.
+
+The draft and the review sit on opposite providers — a model reviewing its own
+writing rates it well. Mechanical checks run after the model review and are not
+advisory.
+
+Technology discovery is conditional (contract A2): known terms are classified
+locally and a cheap model call fires only when unrecognised technical terms
+remain, cached so a repeat JD costs nothing. The model may **discover** a
+technology from a JD; it can never **confirm** you have used it — that comes
+only from career sources.
+
+A typical run is 4 model calls at roughly $0.11.
+
 ## Setup
 
 ```bash

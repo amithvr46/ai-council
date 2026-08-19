@@ -196,3 +196,60 @@ class ClaimAssessmentRow(Base):
     citations: Mapped[list | None] = mapped_column(JSON, nullable=True)  # ordinals of items
 
     request: Mapped[Request] = relationship(back_populates="claim_assessments")
+
+
+class TechnologyCacheRow(Base):
+    """What a discovery call already established about a term.
+
+    Negative answers are stored too: learning that a word is NOT a technology
+    is worth exactly as much as learning that it is, and without it the same
+    non-technology gets re-escalated on every similar JD (contract A2).
+    """
+
+    __tablename__ = "technology_cache"
+
+    term: Mapped[str] = mapped_column(String(120), primary_key=True)  # normalised
+    is_technology: Mapped[bool] = mapped_column(Boolean, default=False)
+    kind: Mapped[str] = mapped_column(String(32), default="other")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class SourceConflictRow(Base):
+    """A material factual disagreement between authoritative career sources.
+
+    Contract A3: conflicts are persisted rather than resolved by "latest
+    document wins", and the disputed fact is withheld until the user settles
+    it. Manufacturing certainty here would put a wrong date on a resume.
+    """
+
+    __tablename__ = "source_conflicts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    kind: Mapped[str] = mapped_column(String(32))  # employer_dates | education | ...
+    subject: Mapped[str] = mapped_column(String(255))  # what the fact is about
+    values: Mapped[list | None] = mapped_column(JSON, nullable=True)  # [{source, value}]
+    resolved_value: Mapped[str] = mapped_column(Text, default="")
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ArtifactRow(Base):
+    """A generated document and the trace behind it.
+
+    The user sees the finished result (contract A12); the trace stays so any
+    bullet can be traced back to the classification that let it through.
+    """
+
+    __tablename__ = "artifacts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    kind: Mapped[str] = mapped_column(String(32), default="resume_tailor")
+    jd_document_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    role_family: Mapped[str] = mapped_column(String(32), default="")
+    title: Mapped[str] = mapped_column(String(255), default="")
+    content: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # structured resume
+    trace: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), default="complete")
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    file_path: Mapped[str] = mapped_column(Text, default="")
