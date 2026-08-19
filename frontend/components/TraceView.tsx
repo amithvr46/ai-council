@@ -40,6 +40,7 @@ const CLASS_COLORS: Record<string, string> = {
 export default function TraceView({ trace }: { trace: Trace }) {
   const byStage = (name: string) => trace.steps.find((s) => s.stage === name);
   const routing = byStage("routing")?.output as any;
+  const escalation = byStage("routing_escalation")?.output as any;
   const candA = byStage("candidate_a");
   const candB = byStage("candidate_b");
   const check = byStage("combined_check")?.output as any;
@@ -49,6 +50,25 @@ export default function TraceView({ trace }: { trace: Trace }) {
 
   return (
     <div className="space-y-2">
+      {escalation && (
+        <Section
+          title={
+            escalation.result === "escalated"
+              ? `Escalated · council → deep · free to decide`
+              : `Escalation considered · not performed · free`
+          }
+        >
+          <div className="text-zinc-300">
+            <p>{escalation.reason}</p>
+            <p className="mt-1 text-xs text-zinc-500">
+              {escalation.logical_calls_already_spent} calls and $
+              {Number(escalation.cost_already_spent_usd).toFixed(4)} already spent
+              carry forward
+              {escalation.refusal_reason ? ` · ${escalation.refusal_reason}` : ""}
+            </p>
+          </div>
+        </Section>
+      )}
       {routing && (
         <Section title={`Routing · chose ${routing.chosen} · free`}>
           <div className="text-zinc-300">

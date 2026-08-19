@@ -24,6 +24,7 @@ from council.db.models import ClaimAssessmentRow, EvidenceItemRow, Request, Step
 from council.db.session import session_scope
 from council.engine.assessor_guards import blind_claims, sanitize
 from council.engine.budget import BudgetTracker
+from council.engine.escalation import evaluate as evaluate_escalation
 from council.engine.prompts import PromptRegistry
 from council.engine.routing import MODES, RoutingDecision, decide
 from council.engine.schemas import (
@@ -38,7 +39,7 @@ from council.engine.schemas import (
 )
 from council.engine.streaming import DeltaThrottle, FieldStreamExtractor
 from council.providers.base import ModelProvider, ModelResponse, ProviderError
-from council.spend import BudgetRefused, check_affordable
+from council.spend import BudgetRefused, check_affordable, incremental_estimate
 
 
 class CouncilEngine:
@@ -73,6 +74,7 @@ class CouncilEngine:
         # synthetic). Set once at construction so a benchmark run cannot
         # accidentally write rows that look like organic usage.
         self.data_class = data_class
+        self._budgets: dict[str, BudgetTracker] = {}
         self._cancel_started: dict[str, float] = {}
         # Provider calls that have been initiated but not yet returned. If a
         # request is cancelled mid-flight these are persisted as interrupted
@@ -212,6 +214,7 @@ class CouncilEngine:
             question, mode, outcome_kind, routing
         )
         budget = BudgetTracker(mode)
+        routed_by_auto = routing_decision is not None and routing_decision.was_routed
 
         # Forward affordability: refuse BEFORE starting work that cannot be
         # completed within the remaining spend budget. Enforced here at the
@@ -232,21 +235,32 @@ class CouncilEngine:
         self._emit(request_id, {"type": "started", "mode": mode})
         seq = _Seq()
         history = history or []
+        # The tracker is the authority on this request's consumption; register
+        # it so every recorded generation feeds back into it.
+        self._budgets[request_id] = budget
 
         try:
             if mode == "quick":
                 final = await self._run_quick(request_id, question, budget, seq, history)
             else:
                 final = await self._run_council(
-                    request_id, question, budget, seq, deep=(mode == "deep"), history=history
+                    request_id, question, budget, seq, deep=(mode == "deep"),
+                    history=history, routed_by_auto=routed_by_auto,
                 )
         except asyncio.CancelledError:
             self._cancel_started[request_id] = started
             raise  # the API layer records the cancellation
         except Exception as e:
+            self._budgets.pop(request_id, None)
             await self._finish(request_id, status="failed", error=str(e), started=started)
             raise
+        finally:
+            # Cancellation included: no tracker outlives its request.
+            self._budgets.pop(request_id, None)
 
+        # An escalated request ran deep, and its stored mode says so.
+        if budget.escalations:
+            await self._persist_mode(request_id, budget.mode)
         await self._finish(request_id, started=started, **final)
         return await self.get_request(request_id)
 
@@ -327,6 +341,7 @@ class CouncilEngine:
         seq,
         deep: bool = False,
         history: list | None = None,
+        routed_by_auto: bool = False,
     ) -> dict:
         prompt = self.registry.get("candidate")
         # Randomize which provider is Candidate A — blinding starts at birth,
@@ -391,6 +406,15 @@ class CouncilEngine:
         # --- evidence layer (deep mode) --------------------------------
         # Gathered BEFORE any answer is produced, so its verdicts constrain
         # the answer rather than being audited into it afterwards.
+        # --- bounded escalation (3B) -----------------------------------
+        # The decision Auto could not make before execution: the models have
+        # now actually disagreed, so uncertainty is observed rather than
+        # predicted. Costs zero model calls.
+        if not deep:
+            deep = await self._maybe_escalate(
+                request_id, check, budget, seq, routed_by_auto=routed_by_auto
+            )
+
         evidence: EvidenceContext | None = None
         if deep and check.checkable_claims:
             evidence = await self._gather_and_assess_evidence(
@@ -1109,6 +1133,56 @@ class CouncilEngine:
             await s.flush()
             return req.id
 
+    async def _maybe_escalate(self, request_id, check, budget, seq, *, routed_by_auto) -> bool:
+        """Decide, record and (if justified) raise the ceiling. Returns whether
+        deep should now run.
+
+        Recorded whenever escalation was genuinely considered — a refusal is
+        exactly as auditable as an escalation, because "we noticed the
+        disagreement and could not afford to check it" is something the user
+        deserves to see rather than an invisible non-event.
+        """
+        evidence_available = bool(self.evidence_tools)
+
+        # Free conditions first: no spend query for a request that was never
+        # going to escalate.
+        decision = evaluate_escalation(
+            routed_by_auto=routed_by_auto,
+            check=check,
+            budget=budget,
+            evidence_available=evidence_available,
+        )
+        if decision.escalate:
+            # Only now is a dollar check worth running, and it prices the
+            # INCREMENT rather than a fresh deep run.
+            estimate = await incremental_estimate("council", "deep")
+            spend_decision = await check_affordable("deep", estimate=estimate)
+            decision = evaluate_escalation(
+                routed_by_auto=routed_by_auto,
+                check=check,
+                budget=budget,
+                evidence_available=evidence_available,
+                spend_decision=spend_decision,
+            )
+
+        # Silent non-events (agreement, explicit mode) are not worth a step.
+        if decision.refusal in ("not_auto_routed", "not_a_factual_disagreement"):
+            return False
+
+        if decision.escalate:
+            budget.raise_ceiling("deep")
+
+        payload = {**decision.as_dict(), "budget": budget.as_dict()}
+        await self._record_stage(request_id, seq(), "routing_escalation", payload)
+        self._emit(request_id, {"type": "routing_escalation", **payload})
+        return decision.escalate
+
+    async def _persist_mode(self, request_id: str, mode: str) -> None:
+        async with session_scope() as s:
+            req = await s.get(Request, request_id)
+            if req is not None:
+                req.mode = mode
+
     async def _record_routing(self, request_id: str, decision: RoutingDecision) -> None:
         """A zero-cost step: no provider, no model, no tokens.
 
@@ -1121,6 +1195,11 @@ class CouncilEngine:
     async def _record_call(
         self, request_id, seq, stage, resp: ModelResponse, prompt_version, output=None
     ):
+        # The tracker stays the single authority on consumption, so it learns
+        # about attempts and dollars here rather than from a later DB read.
+        tracker = self._budgets.get(request_id)
+        if tracker is not None:
+            tracker.record(api_attempts=resp.api_attempts, cost_usd=resp.cost_usd)
         async with session_scope() as s:
             s.add(
                 Step(

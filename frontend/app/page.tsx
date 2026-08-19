@@ -32,6 +32,9 @@ type ChatEntry = {
   requestId: string | null;
   question: string;
   mode: string;
+  // What Auto actually ran. Differs from `mode` when the user chose "auto",
+  // and differs again when a request escalated mid-flight.
+  effectiveMode?: string;
   events: StageEvent[];
   running: boolean;
   error: string | null;
@@ -184,6 +187,7 @@ export default function AskPage() {
             running: false,
             live: null,
             trace,
+            effectiveMode: trace.mode,
             answer: trace.final_answer
               ? {
                   final_answer: trace.final_answer,
@@ -282,7 +286,10 @@ export default function AskPage() {
                       </div>
                       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-zinc-800/70 pt-2.5 text-xs text-zinc-500 tabular-nums">
                         <span>
-                          {e.mode} · {e.answer.model_calls} calls · $
+                          {e.mode === "auto" && e.effectiveMode
+                            ? `Auto → ${e.effectiveMode[0].toUpperCase()}${e.effectiveMode.slice(1)}`
+                            : e.mode}{" "}
+                          · {e.answer.model_calls} calls · $
                           {e.answer.cost_usd.toFixed(4)} ·{" "}
                           {((e.answer.latency_ms ?? 0) / 1000).toFixed(1)}s
                           <button

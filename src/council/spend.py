@@ -194,6 +194,19 @@ async def estimate_cost(mode: str) -> float:
     return max(ordered[index], FALLBACK_ESTIMATES.get(mode, 0.0) * 0.5)
 
 
+async def incremental_estimate(from_mode: str, to_mode: str) -> float:
+    """What ESCALATING costs, not what a fresh run of `to_mode` costs.
+
+    Council has already paid for its candidates and check; charging the full
+    deep estimate against the remaining budget would refuse escalations that
+    are comfortably affordable. Floored at a small positive value so a noisy
+    history cannot make escalation look free.
+    """
+    richer = await estimate_cost(to_mode)
+    already = await estimate_cost(from_mode)
+    return max(richer - already, FALLBACK_ESTIMATES[to_mode] * 0.25)
+
+
 async def check_affordable(mode: str, *, estimate: float | None = None) -> SpendDecision:
     """Forward affordability check, run BEFORE work starts."""
     settings = await load_settings()
