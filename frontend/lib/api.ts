@@ -84,10 +84,14 @@ export async function askAsync(
     body: JSON.stringify({ question, mode, conversation_id: conversationId ?? null }),
   });
   if (!r.ok) {
-    let detail = "";
+    let detail: unknown = "";
     try {
       detail = (await r.json()).detail ?? "";
     } catch {}
+    if (r.status === 402 && detail && typeof detail === "object") {
+      // Budget refusal: show the reason, not a generic HTTP error.
+      throw new Error((detail as { reason?: string }).reason ?? "budget limit reached");
+    }
     throw new Error(`ask failed (${r.status})${detail ? `: ${detail}` : ""}`);
   }
   return r.json();

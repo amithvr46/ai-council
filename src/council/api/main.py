@@ -14,6 +14,14 @@ from council.db.session import ensure_engine, get_engine, session_scope
 from council.engine.budget import MODE_BUDGETS
 from council.engine.events import bus
 from council.engine.factory import build_engine
+from council.spend import (
+    BudgetRefused,
+    check_affordable,
+    estimate_cost,
+    load_settings,
+    save_settings,
+    spend_snapshot,
+)
 
 engine = None
 _background: set[asyncio.Task] = set()
@@ -111,13 +119,22 @@ async def _ensure_conversation(body: AskBody) -> str:
 async def ask(body: AskBody):
     """Synchronous: runs the full pipeline, returns the completed trace."""
     history = await _conversation_history(body.conversation_id) if body.conversation_id else []
-    return await engine.run(body.question, body.mode, history=history)
+    try:
+        return await engine.run(body.question, body.mode, history=history)
+    except BudgetRefused as e:
+        raise HTTPException(status_code=402, detail=e.decision.as_dict()) from None
 
 
 @app.post("/ask/async")
 async def ask_async(body: AskBody):
     """Returns the request + conversation ids immediately; subscribe to
     /requests/{id}/stream for live stage events."""
+    # Check affordability before creating anything, so a refused request
+    # leaves no orphan conversation or request row behind.
+    decision = await check_affordable(body.mode)
+    if not decision.allowed:
+        raise HTTPException(status_code=402, detail=decision.as_dict())
+
     conversation_id = await _ensure_conversation(body)
     history = await _conversation_history(conversation_id)
     request_id = await engine.create(body.question, body.mode, conversation_id)
@@ -405,6 +422,49 @@ async def rate(request_id: str, body: RateBody):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- budget
+
+
+class BudgetPatch(BaseModel):
+    daily_limit_usd: float | None = Field(default=None, ge=0)
+    monthly_limit_usd: float | None = Field(default=None, ge=0)
+    warn_threshold_pct: int | None = Field(default=None, ge=1, le=100)
+    hard_stop: bool | None = None
+
+
+@app.get("/budget")
+async def get_budget():
+    settings = await load_settings()
+    snapshot = await spend_snapshot(settings)
+    estimates = {mode: round(await estimate_cost(mode), 4) for mode in MODE_BUDGETS}
+    return {
+        "settings": {
+            "daily_limit_usd": settings.daily_limit_usd,
+            "monthly_limit_usd": settings.monthly_limit_usd,
+            "warn_threshold_pct": settings.warn_threshold_pct,
+            "hard_stop": settings.hard_stop,
+        },
+        "spent_today": round(snapshot.today, 4),
+        "spent_month": round(snapshot.month, 4),
+        "remaining_today": round(snapshot.remaining_today, 4)
+        if snapshot.remaining_today != float("inf")
+        else None,
+        "remaining_month": round(snapshot.remaining_month, 4)
+        if snapshot.remaining_month != float("inf")
+        else None,
+        "warn_at_today": round(
+            settings.daily_limit_usd * settings.warn_threshold_pct / 100, 4
+        ),
+        "estimates": estimates,
+    }
+
+
+@app.put("/budget")
+async def put_budget(body: BudgetPatch):
+    await save_settings(**body.model_dump())
+    return await get_budget()
+
+
 @app.get("/health")
 async def health():
-    return {"ok": True, "budgets": MODE_BUDGETS}
+    return {"ok": True, "call_budgets": MODE_BUDGETS}

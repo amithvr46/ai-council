@@ -104,6 +104,20 @@ class Step(Base):
     request: Mapped[Request] = relationship(back_populates="steps")
 
 
+class BudgetSettingsRow(Base):
+    """Singleton row (id=1) holding spend ceilings. Runtime-editable so limits
+    can change without a restart."""
+
+    __tablename__ = "budget_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    daily_limit_usd: Mapped[float] = mapped_column(Float, default=5.0)
+    monthly_limit_usd: Mapped[float] = mapped_column(Float, default=30.0)
+    warn_threshold_pct: Mapped[int] = mapped_column(Integer, default=70)
+    hard_stop: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class EvidenceItemRow(Base):
     """One retrieved piece of evidence — a search result or an execution."""
 

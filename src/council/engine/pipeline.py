@@ -36,6 +36,7 @@ from council.engine.schemas import (
 )
 from council.engine.streaming import DeltaThrottle, FieldStreamExtractor
 from council.providers.base import ModelProvider, ModelResponse, ProviderError
+from council.spend import BudgetRefused, check_affordable
 
 
 class CouncilEngine:
@@ -145,8 +146,20 @@ class CouncilEngine:
         started = time.monotonic()
         budget = BudgetTracker(mode)
 
+        # Forward affordability: refuse BEFORE starting work that cannot be
+        # completed within the remaining spend budget. Enforced here at the
+        # engine boundary so every caller — CLI, API, and every later phase —
+        # inherits it rather than each remembering to check.
+        decision = await check_affordable(mode)
+        if not decision.allowed:
+            raise BudgetRefused(decision)
+
         if request_id is None:
             request_id = await self._create_request(question, mode, None)
+        if decision.warning:
+            await self._record_stage(
+                request_id, 0, "budget_warning", decision.as_dict()
+            )
         self._emit(request_id, {"type": "started", "mode": mode})
         seq = _Seq()
         history = history or []
