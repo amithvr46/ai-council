@@ -67,18 +67,49 @@ DEFAULT_DOMAINS = [
     "release engineering", "containers and orchestration", "production operations",
     "monitoring and observability", "incident troubleshooting", "root cause analysis",
     "automation and scripting", "security and governance", "networking",
-    "cost management",
+    "cost management", "identity and access management", "artifact management",
+    "configuration management",
 ]
 
+# Technology names only — no employers, no personal detail. Those come from
+# ingested career sources at runtime and stay in the local database, which is
+# what keeps this file safe to publish.
 DEFAULT_TECHNOLOGIES = [
-    "azure", "aws", "azure devops", "terraform", "terraform enterprise", "ansible",
-    "docker", "kubernetes", "aks", "eks", "jenkins", "harness", "argo cd", "gitlab",
-    "github actions", "git", "helm", "splunk", "grafana", "prometheus",
-    "azure monitor", "log analytics", "kql", "application insights", "cloudwatch",
-    "powershell", "bash", "python",
+    # cloud platforms
+    "azure", "aws",
+    # infrastructure as code and configuration
+    "terraform", "terraform enterprise", "arm templates", "cloudformation",
+    "ansible", "azure cli", "aws cli",
+    # delivery
+    "azure devops", "jenkins", "harness", "github actions", "gitlab", "git",
+    "github", "jfrog artifactory", "maven", "npm",
+    # containers
+    "docker", "kubernetes", "aks", "eks", "helm", "argo cd", "gitops",
+    # observability
+    "azure monitor", "log analytics", "kql", "application insights", "splunk",
+    "grafana", "prometheus", "cloudwatch",
+    # security, identity and governance
+    "entra id", "rbac", "managed identity", "key vault", "hashicorp vault",
+    "iam", "azure policy",
+    # aws services
+    "ec2", "rds", "vpc", "elb", "route 53", "cloudfront", "lambda", "s3",
+    "elastic beanstalk", "sns",
+    # scripting and tooling
+    "powershell", "bash", "python", "linux", "jira",
 ]
 
-# Common ways the same technology is written. Extending this list is routine.
+# Common ways the same thing is written. Extending this list is routine.
+#
+# Two kinds of entry live here and both matter:
+#   1. technology spellings — "k8s" is Kubernetes
+#   2. domain phrasing — a JD says "incident response" where the profile says
+#      "incident troubleshooting". Without the mapping the analyser reports a
+#      genuine strength as unsupported, and the resume under-claims real work.
+#
+# Only true synonyms belong here. Adjacent-but-different terms ("reliability",
+# "gitops", "developer enablement") are deliberately absent: reporting them
+# unsupported is the honest answer, and the profile is extensible if the user
+# decides they belong.
 ALIASES: dict[str, str] = {
     "azure kubernetes service": "aks",
     "elastic kubernetes service": "eks",
@@ -88,11 +119,41 @@ ALIASES: dict[str, str] = {
     "gh actions": "github actions",
     "tfe": "terraform enterprise",
     "iac": "infrastructure as code",
-    "adо": "azure devops",
+    "ado": "azure devops",
     "azure pipelines": "azure devops",
     "log analytics workspace": "log analytics",
     "app insights": "application insights",
     "rca": "root cause analysis",
+    "microsoft entra id": "entra id",
+    "azure active directory": "entra id",
+    "azure ad": "entra id",
+    "aad": "entra id",
+    "managed identities": "managed identity",
+    # NOT "vault" -> "hashicorp vault": "Key Vault" ends in the word Vault, so
+    # a bare alias would confirm HashiCorp Vault off an Azure Key Vault
+    # mention. Over-confirmation is exactly the failure mode this file exists
+    # to prevent.
+    "azure key vault": "key vault",
+    "artifactory": "jfrog artifactory",
+    "arm template": "arm templates",
+    "route53": "route 53",
+    "amazon s3": "s3",
+    "microsoft azure": "azure",
+    "amazon web services": "aws",
+    # domain phrasing
+    "incident response": "incident troubleshooting",
+    "production troubleshooting": "incident troubleshooting",
+    "troubleshooting": "incident troubleshooting",
+    "observability": "monitoring and observability",
+    "monitoring": "monitoring and observability",
+    "automation": "automation and scripting",
+    "scripting": "automation and scripting",
+    "security": "security and governance",
+    "reusable infrastructure patterns": "infrastructure as code",
+    "identity": "identity and access management",
+    "access management": "identity and access management",
+    "containers": "containers and orchestration",
+    "orchestration": "containers and orchestration",
 }
 
 
@@ -202,6 +263,68 @@ def assemble_confirmed(
                 add(term, label)
 
     return confirmed
+
+
+# Technologies the JD scanner recognises but the career does not claim.
+#
+# This list exists because a vocabulary built from confirmed experience can
+# only ever find what the user already has. To answer "what is this JD asking
+# for that I cannot support?" the scanner needs to recognise names that are
+# deliberately absent from DEFAULT_TECHNOLOGIES. Nothing here is ever
+# confirmable from this list — it only makes a gap visible.
+FOREIGN_TECHNOLOGIES = [
+    "gcp", "google cloud", "google cloud platform", "gke",
+    "google kubernetes engine", "cloud run", "cloud sql", "bigquery",
+    "cloud build", "pub/sub", "firestore", "anthos",
+    "openshift", "rancher", "nomad", "consul", "istio", "linkerd",
+    "chef", "puppet", "saltstack", "pulumi", "cdk", "crossplane",
+    "datadog", "new relic", "dynatrace", "sumo logic", "elk", "elasticsearch",
+    "opentelemetry", "pagerduty", "opsgenie",
+    "circleci", "travis ci", "teamcity", "bamboo", "spinnaker", "flux",
+    "kafka", "rabbitmq", "airflow", "databricks", "snowflake",
+    "go", "golang", "java", "ruby", "rust", "scala", "typescript",
+    "mongodb", "cassandra", "redis", "postgresql", "mysql", "oracle",
+    "vmware", "openstack", "cisco", "f5", "palo alto",
+]
+
+_JD_ALIASES = {
+    "google cloud": "gcp",
+    "google cloud platform": "gcp",
+    "google kubernetes engine": "gke",
+    "golang": "go",
+}
+
+
+def scan_jd_technologies(
+    jd_text: str, confirmed: ConfirmedExperience
+) -> tuple[list[str], list[str]]:
+    """Which technologies the JD names, split by whether the career supports them.
+
+    Returns (supported, unsupported). The unsupported half is the point: it is
+    the honest answer to "what does this role want that I cannot claim?", and
+    it is what stops the generator quietly writing the JD's requirements into
+    the resume as if they were experience.
+    """
+    known = (
+        {normalise(t) for t in DEFAULT_TECHNOLOGIES}
+        | set(confirmed.terms)
+        | set(ALIASES)
+        | set(FOREIGN_TECHNOLOGIES)
+        | set(_JD_ALIASES)
+    )
+    supported: list[str] = []
+    unsupported: list[str] = []
+    for term in sorted(known, key=len, reverse=True):
+        if not _mentions(jd_text, term):
+            continue
+        canonical = _JD_ALIASES.get(term, normalise(term))
+        bucket = supported if confirmed.is_confirmed(canonical) else unsupported
+        if canonical not in bucket:
+            bucket.append(canonical)
+    # Drop anything that landed in both because two spellings disagreed;
+    # confirmation wins, since a career source established it.
+    unsupported = [t for t in unsupported if t not in supported]
+    return sorted(supported), sorted(unsupported)
 
 
 def detect_role_family(jd_text: str) -> tuple[str, list[str]]:

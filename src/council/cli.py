@@ -1,10 +1,20 @@
 import asyncio
 import json
+from pathlib import Path
 
 import typer
 
 from council.db.models import Base
 from council.db.session import get_engine, init_engine
+from council.documents.extract import ExtractionError, extract
+from council.documents.profile import (
+    AUTHORITY_JD,
+    CAREER_AUTHORITIES,
+    assemble_confirmed,
+    detect_role_family,
+    scan_jd_technologies,
+)
+from council.documents.store import career_documents, load_profile, save_profile, store_document
 from council.engine.factory import build_engine
 
 app = typer.Typer(help="AI Council — ask once, get one verified answer.")
@@ -53,6 +63,139 @@ def show(request_id: str):
         return await engine.get_request(request_id)
 
     typer.echo(json.dumps(asyncio.run(_run()), indent=2, default=str))
+
+
+@app.command()
+def ingest(
+    path: str,
+    authority: str = typer.Option(
+        "supporting",
+        help="profile | master_resume | supporting | tailored_resume | jd",
+    ),
+    title: str = typer.Option("", help="Display name; defaults to the filename"),
+):
+    """Ingest a career source or a job description.
+
+    Career sources add to confirmed experience and never subtract. A JD is the
+    target, not evidence — ingesting one never makes the system claim what it
+    asks for.
+    """
+    if authority not in (*CAREER_AUTHORITIES, AUTHORITY_JD):
+        typer.echo(f"unknown authority '{authority}'", err=True)
+        raise typer.Exit(2)
+
+    file = Path(path).expanduser()
+    if not file.is_file():
+        typer.echo(f"no such file: {file}", err=True)
+        raise typer.Exit(2)
+
+    async def _run():
+        await _ensure_schema()
+        try:
+            extracted = extract(file.name, file.read_bytes())
+        except ExtractionError as e:
+            typer.echo(f"cannot read {file.name}: {e}", err=True)
+            raise typer.Exit(1) from None
+        return await store_document(
+            filename=file.name, title=title, authority=authority, extracted=extracted
+        )
+
+    row, duplicate = asyncio.run(_run())
+    state = "already ingested" if duplicate else "ingested"
+    typer.echo(
+        f"{state}: {row.title} [{row.authority}] "
+        f"{row.detected_kind}, {row.char_count} chars, id={row.id}"
+    )
+    if row.truncated:
+        typer.echo("  note: text was truncated at the size limit")
+
+
+@app.command()
+def profile(
+    show_sources: bool = typer.Option(False, "--sources", help="Show what established each term"),
+):
+    """Show confirmed experience assembled from every career source."""
+
+    async def _run():
+        await _ensure_schema()
+        p = await load_profile()
+        return p, assemble_confirmed(p, await career_documents())
+
+    p, confirmed = asyncio.run(_run())
+    typer.echo(f"{len(confirmed.terms)} confirmed terms")
+    if p.employers:
+        typer.echo(f"employers: {', '.join(p.employers)}")
+    if p.roles:
+        typer.echo(f"roles: {', '.join(p.roles)}")
+    if show_sources:
+        for term in sorted(confirmed.terms):
+            typer.echo(f"  {term}  <-  {', '.join(confirmed.sources[term])}")
+    else:
+        typer.echo(", ".join(sorted(confirmed.terms)))
+
+
+# Module-level singleton: typer needs it as a default, ruff's B008 objects to
+# the inline call.
+_PROFILE_VALUES = typer.Argument(..., help="Replacement values for that field")
+
+
+@app.command("profile-set")
+def profile_set(
+    field: str = typer.Argument(
+        ..., help="technologies | domains | roles | employers | certifications | achievements"
+    ),
+    values: list[str] = _PROFILE_VALUES,
+):
+    """Set a profile field. The profile is extensible by design — adding real
+    experience later is a command, not a redesign."""
+    allowed = {"technologies", "domains", "roles", "employers", "certifications", "achievements"}
+    if field not in allowed:
+        typer.echo(f"unknown field '{field}'; expected one of {sorted(allowed)}", err=True)
+        raise typer.Exit(2)
+
+    async def _run():
+        await _ensure_schema()
+        await save_profile(**{field: list(values)})
+
+    asyncio.run(_run())
+    typer.echo(f"{field}: {', '.join(values)}")
+
+
+@app.command("analyze-jd")
+def analyze_jd(path: str):
+    """Report which role family a JD targets and how the confirmed career maps
+    onto it, without treating the JD as evidence."""
+    file = Path(path).expanduser()
+    if not file.is_file():
+        typer.echo(f"no such file: {file}", err=True)
+        raise typer.Exit(2)
+
+    async def _run():
+        await _ensure_schema()
+        try:
+            extracted = extract(file.name, file.read_bytes())
+        except ExtractionError as e:
+            typer.echo(f"cannot read {file.name}: {e}", err=True)
+            raise typer.Exit(1) from None
+        p = await load_profile()
+        return extracted.text, assemble_confirmed(p, await career_documents())
+
+    text, confirmed = asyncio.run(_run())
+    family, emphasis = detect_role_family(text)
+    supported = [e for e in emphasis if confirmed.is_confirmed(e)]
+    unsupported = [e for e in emphasis if not confirmed.is_confirmed(e)]
+    tech_supported, tech_unsupported = scan_jd_technologies(text, confirmed)
+    typer.echo(f"role family: {family}")
+    typer.echo(f"supported emphasis:   {', '.join(supported) or '(none)'}")
+    typer.echo(f"unsupported emphasis: {', '.join(unsupported) or '(none)'}")
+    typer.echo(f"JD technologies you have:    {', '.join(tech_supported) or '(none)'}")
+    typer.echo(f"JD technologies you do NOT:  {', '.join(tech_unsupported) or '(none)'}")
+    if unsupported or tech_unsupported:
+        typer.echo(
+            "\nUnsupported means no career source establishes it. The resume will "
+            "not claim these. Add real experience with `council profile-set` if any "
+            "of them belong."
+        )
 
 
 if __name__ == "__main__":

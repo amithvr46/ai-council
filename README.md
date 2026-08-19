@@ -53,6 +53,41 @@ with a temp cwd, scrubbed env, timeout and POSIX rlimits; it is a
 blast-radius limiter, not a security boundary, and can be disabled with
 `EVIDENCE_CODE_EXECUTION=false`.
 
+**Phase 2A (complete) — spend control.** Cost is estimated *before* a run
+starts, from your own history (p75 over 30 days, falling back to per-mode
+defaults until there are 3 samples). A run that cannot finish inside the
+remaining budget is refused up front rather than stopping half-way: the API
+returns 402 with the estimate and what's left. Limits are runtime-editable via
+`GET/PUT /budget`.
+
+**Phase 2B (complete) — career source ingestion.** Real career documents go in;
+confirmed experience comes out. Every career source contributes **positively**
+and none ever subtracts, so a tailored resume that omits Harness is a selective
+view, not evidence that Harness was never used. A job description is the
+*target*, never career evidence — ingesting a GCP-heavy JD does not make the
+system able to claim GCP.
+
+```bash
+.venv/bin/council ingest ~/resume.docx --authority master_resume
+.venv/bin/council profile --sources        # confirmed terms + what established each
+.venv/bin/council profile-set employers "Acme" "Globex"
+.venv/bin/council analyze-jd ~/jd.txt      # role family + what the JD wants that you can't claim
+```
+
+`analyze-jd` answers the question that actually matters before applying:
+
+```
+role family: infrastructure
+JD technologies you have:    ci/cd, docker, helm, kubernetes, linux, python, terraform, ...
+JD technologies you do NOT:  cloud run, cloud sql, gcp, gke
+```
+
+Nothing on the "do NOT" line will be written into a resume. Your documents stay
+in your local database and never enter this repository.
+
+Same operations over HTTP: `POST /documents` (multipart), `GET/PATCH/DELETE
+/documents`, `GET/PUT /career-profile`, `POST /career-profile/analyze-jd`.
+
 ## Setup
 
 ```bash

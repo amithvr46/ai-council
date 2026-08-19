@@ -3,14 +3,28 @@ import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from council.db.models import Base, Conversation, Request
+from council.db.models import Base, Conversation, DocumentRow, Request
 from council.db.session import ensure_engine, get_engine, session_scope
+from council.documents.extract import ExtractionError, extract
+from council.documents.profile import (
+    AUTHORITY_JD,
+    CAREER_AUTHORITIES,
+    assemble_confirmed,
+    detect_role_family,
+    scan_jd_technologies,
+)
+from council.documents.store import (
+    career_documents,
+    load_profile,
+    save_profile,
+    store_document,
+)
 from council.engine.budget import MODE_BUDGETS
 from council.engine.events import bus
 from council.engine.factory import build_engine
@@ -420,6 +434,158 @@ async def rate(request_id: str, body: RateBody):
             raise HTTPException(status_code=404, detail="request not found")
         req.user_rating = body.rating
     return {"ok": True}
+
+
+# -------------------------------------------------------------- documents
+
+
+_AUTHORITY_PATTERN = "^(profile|master_resume|supporting|tailored_resume|jd)$"
+
+# Module-level singletons: FastAPI needs these as defaults, and ruff's B008
+# rightly objects to calling them inline.
+_UPLOAD_FILE = File(...)
+_FORM_AUTHORITY = Form("supporting")
+_FORM_TITLE = Form("")
+
+
+class DocumentPatch(BaseModel):
+    title: str | None = None
+    authority: str | None = Field(default=None, pattern=_AUTHORITY_PATTERN)
+
+
+@app.post("/documents")
+async def upload_document(
+    file: UploadFile = _UPLOAD_FILE,
+    authority: str = _FORM_AUTHORITY,
+    title: str = _FORM_TITLE,
+):
+    """Ingest source material. A file that cannot be parsed is refused with a
+    reason — never stored as an empty document that looks like an empty
+    resume."""
+    if authority not in (*CAREER_AUTHORITIES, AUTHORITY_JD):
+        raise HTTPException(status_code=422, detail=f"unknown authority '{authority}'")
+    data = await file.read()
+    name = file.filename or "upload"
+    try:
+        extracted = extract(name, data)
+    except ExtractionError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from None
+
+    row, duplicate = await store_document(
+        filename=name, title=title, authority=authority, extracted=extracted
+    )
+    return _document_dict(row, duplicate=duplicate)
+
+
+def _document_dict(row: DocumentRow, duplicate: bool = False) -> dict:
+    return {
+        "id": row.id,
+        "filename": row.filename,
+        "title": row.title,
+        "authority": row.authority,
+        "detected_kind": row.detected_kind,
+        "char_count": row.char_count,
+        "truncated": row.truncated,
+        "created_at": row.created_at.isoformat(),
+        "duplicate": duplicate,
+    }
+
+
+@app.get("/documents")
+async def list_documents():
+    async with session_scope() as s:
+        rows = (
+            await s.execute(select(DocumentRow).order_by(DocumentRow.created_at.desc()))
+        ).scalars().all()
+        return {"items": [_document_dict(r) for r in rows]}
+
+
+@app.get("/documents/{document_id}")
+async def get_document(document_id: str):
+    async with session_scope() as s:
+        row = await s.get(DocumentRow, document_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="document not found")
+        return {**_document_dict(row), "text": row.text}
+
+
+@app.patch("/documents/{document_id}")
+async def patch_document(document_id: str, body: DocumentPatch):
+    async with session_scope() as s:
+        row = await s.get(DocumentRow, document_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="document not found")
+        if body.title is not None:
+            row.title = body.title
+        if body.authority is not None:
+            row.authority = body.authority
+        return _document_dict(row)
+
+
+@app.delete("/documents/{document_id}")
+async def delete_document(document_id: str):
+    async with session_scope() as s:
+        row = await s.get(DocumentRow, document_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="document not found")
+        await s.delete(row)
+    return {"ok": True}
+
+
+# --------------------------------------------------------- career profile
+
+
+class ProfilePatch(BaseModel):
+    technologies: list[str] | None = None
+    domains: list[str] | None = None
+    roles: list[str] | None = None
+    employers: list[str] | None = None
+    certifications: list[str] | None = None
+    achievements: list[str] | None = None
+    notes: str | None = None
+
+
+@app.get("/career-profile")
+async def get_career_profile():
+    """The profile plus the assembled confirmed experience, showing which
+    source established each term. Additive only — no source subtracts."""
+    profile = await load_profile()
+    confirmed = assemble_confirmed(profile, await career_documents())
+    return {
+        "profile": profile.as_dict(),
+        "confirmed": sorted(confirmed.terms),
+        "sources": {k: v for k, v in sorted(confirmed.sources.items())},
+    }
+
+
+@app.put("/career-profile")
+async def put_career_profile(body: ProfilePatch):
+    """Extensible by design: adding legitimate experience later is a PUT, not
+    a redesign."""
+    await save_profile(**body.model_dump())
+    return await get_career_profile()
+
+
+@app.post("/career-profile/analyze-jd")
+async def analyze_jd(body: dict):
+    """Which role family the JD targets, and how the confirmed career maps
+    onto it. The JD is never treated as career evidence."""
+    jd_text = body.get("text", "")
+    if not jd_text.strip():
+        raise HTTPException(status_code=422, detail="jd text required")
+    family, emphasis = detect_role_family(jd_text)
+    profile = await load_profile()
+    confirmed = assemble_confirmed(profile, await career_documents())
+    tech_supported, tech_unsupported = scan_jd_technologies(jd_text, confirmed)
+    return {
+        "role_family": family,
+        "emphasis": emphasis,
+        "emphasis_supported": [e for e in emphasis if confirmed.is_confirmed(e)],
+        "emphasis_unsupported": [e for e in emphasis if not confirmed.is_confirmed(e)],
+        # The honest answer to "what does this role want that I can't claim?"
+        "technologies_supported": tech_supported,
+        "technologies_unsupported": tech_unsupported,
+    }
 
 
 # ---------------------------------------------------------------- budget

@@ -1,5 +1,16 @@
 .env
 .venv/
+
+# Local database. Since Phase 2B this holds ingested career sources — resume
+# text, employers, contact details. It must never reach a public repository.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Scratch space for the documents you ingest locally.
+/career-sources/
+
 __pycache__/
 *.pyc
 .pytest_cache/

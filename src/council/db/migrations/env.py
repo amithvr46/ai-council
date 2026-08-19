@@ -7,10 +7,15 @@ from council.db.models import Base
 
 config = context.config
 
-# Alembic runs sync: swap the asyncpg driver for psycopg.
-url = os.environ.get(
-    "DATABASE_URL", "postgresql+asyncpg://council:council@localhost:5432/council"
-).replace("+asyncpg", "+psycopg")
+# Alembic runs sync, so the async driver in DATABASE_URL has to be swapped for
+# its sync equivalent. Both drivers matter: Postgres in production, SQLite for
+# local development — `alembic upgrade head` against a sqlite+aiosqlite URL
+# otherwise dies with a MissingGreenlet error that says nothing useful.
+url = (
+    os.environ.get("DATABASE_URL", "postgresql+asyncpg://council:council@localhost:5432/council")
+    .replace("+asyncpg", "+psycopg")
+    .replace("+aiosqlite", "+pysqlite")
+)
 config.set_main_option("sqlalchemy.url", url)
 
 target_metadata = Base.metadata

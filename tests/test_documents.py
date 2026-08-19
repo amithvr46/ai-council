@@ -20,6 +20,7 @@ from council.documents.profile import (
     assemble_confirmed,
     detect_role_family,
     normalise,
+    scan_jd_technologies,
 )
 from council.documents.style import blocking_violations, check, prompt_guidance
 
@@ -363,3 +364,74 @@ def test_truncation_is_reported():
     result = extract("long.txt", b"a" * 200_000)
     assert result.truncated is True
     assert result.char_count == 120_000
+
+
+# ------------------------------------------------- JD technology gap scanning
+
+
+def _baseline() -> object:
+    return assemble_confirmed(CareerProfile())
+
+
+def test_jd_technology_the_career_lacks_is_reported_unsupported():
+    """The signal that matters most on a GCP-primary JD for an Azure engineer:
+    say plainly what cannot be claimed, instead of quietly claiming it."""
+    jd = (
+        "Infrastructure Engineer working primarily on Google Cloud Platform. "
+        "You will manage GKE clusters, Cloud Run services and Cloud SQL, write "
+        "Terraform, run Kubernetes workloads and support production on Linux."
+    )
+    supported, unsupported = scan_jd_technologies(jd, _baseline())
+    assert "gcp" in unsupported
+    assert "gke" in unsupported
+    assert "cloud run" in unsupported
+    assert "terraform" in supported
+    assert "kubernetes" in supported
+    # Nothing may appear on both sides.
+    assert not set(supported) & set(unsupported)
+
+
+def test_jd_scanner_never_confirms_from_the_jd():
+    """Scanning a JD must not mutate confirmed experience — the JD is the
+    target, never evidence."""
+    confirmed = _baseline()
+    before = set(confirmed.terms)
+    scan_jd_technologies("Deep GCP and BigQuery experience required.", confirmed)
+    assert confirmed.terms == before
+
+
+def test_jd_scanner_credits_a_technology_a_career_source_established():
+    """A technology absent from the seeded baseline still counts once a career
+    source establishes it — otherwise ingestion would be pointless."""
+    jd = "We use Datadog for observability."
+    _, unsupported = scan_jd_technologies(jd, _baseline())
+    assert "datadog" in unsupported
+
+    confirmed = assemble_confirmed(
+        CareerProfile(technologies=["datadog"]),
+        [{"authority": AUTHORITY_MASTER_RESUME, "title": "r", "text": "Datadog monitors."}],
+    )
+    supported, unsupported = scan_jd_technologies(jd, confirmed)
+    assert "datadog" in supported
+    assert "datadog" not in unsupported
+
+
+def test_jd_scanner_matches_spelling_variants_to_one_canonical_name():
+    supported, unsupported = scan_jd_technologies(
+        "Experience with Google Cloud and GCP; Azure Kubernetes Service a plus.",
+        _baseline(),
+    )
+    assert unsupported.count("gcp") == 1
+    assert "google cloud" not in unsupported
+    assert "aks" in supported
+
+
+def test_key_vault_does_not_confirm_hashicorp_vault():
+    """Word-boundary aliasing must not over-confirm: 'Key Vault' ends in the
+    word Vault. Over-claiming is the failure this module exists to prevent."""
+    confirmed = assemble_confirmed(
+        CareerProfile(technologies=[], domains=[]),
+        [{"authority": AUTHORITY_MASTER_RESUME, "title": "r", "text": "Used Azure Key Vault."}],
+    )
+    assert confirmed.is_confirmed("key vault")
+    assert not confirmed.is_confirmed("hashicorp vault")
