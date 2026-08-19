@@ -36,7 +36,7 @@ HISTORY_WINDOW_DAYS = 30
 
 @dataclass(frozen=True)
 class BudgetSettings:
-    daily_limit_usd: float = 5.0
+    daily_limit_usd: float = 3.0
     monthly_limit_usd: float = 30.0
     warn_threshold_pct: int = 70
     hard_stop: bool = True

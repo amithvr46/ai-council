@@ -51,7 +51,7 @@ def _engine(make_engine):
 
 async def test_defaults_apply_when_never_configured(db):
     settings = await load_settings()
-    assert settings.daily_limit_usd == 5.0
+    assert settings.daily_limit_usd == 3.0
     assert settings.monthly_limit_usd == 30.0
     assert settings.warn_threshold_pct == 70
     assert settings.hard_stop is True

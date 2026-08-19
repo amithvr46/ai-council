@@ -34,6 +34,46 @@ of limited space.
 Goal: maximise probability of shortlist/interview while remaining truthful and
 technically defensible. **Do not optimise merely for ATS score.**
 
+## 2A. Role family
+
+The user's legitimate career scope is broader than "Cloud/DevOps Engineer".
+These are related role families supported by the same underlying experience,
+**not separate invented career paths**:
+
+DevOps Engineer · Azure DevOps Engineer · Cloud DevOps Engineer · Cloud
+Engineer · Cloud Operations Engineer · Infrastructure Engineer · Platform
+Engineer · Site Reliability Engineer / SRE · Production Operations /
+Production SRE · Cloud Infrastructure Engineer · closely related Cloud /
+DevOps / Platform / Infrastructure / SRE / Operations roles.
+
+The system identifies the target role family from the JD and **shifts
+emphasis, never invents a different career**:
+
+| Target family | Emphasise |
+|---|---|
+| SRE | production troubleshooting, incident response, observability, reliability, Kubernetes, automation, monitoring, RCA, operational support |
+| Platform Engineering | Terraform/IaC, reusable infrastructure patterns, CI/CD, Kubernetes, automation, developer enablement, GitOps, security, platform operations |
+| Azure DevOps | Azure, Azure DevOps, Terraform, CI/CD, Harness/Jenkins/GitHub Actions/GitLab where relevant, AKS, scripting, security, deployment automation |
+| Cloud Operations | production Azure/AWS operations, monitoring, troubleshooting, incidents, infrastructure changes, access/security, cost management, automation, operational reliability |
+| Infrastructure Engineer | cloud infrastructure, Terraform, networking, identity/security, Kubernetes, automation, configuration management, production operations |
+
+## 2B. Confirmed engineering domains
+
+Career baseline: cloud infrastructure; infrastructure as code; CI/CD and
+release engineering; containers and orchestration; production operations;
+monitoring and observability; incident troubleshooting / RCA; automation and
+scripting; security and governance; networking; cost management.
+
+Confirmed technologies include those in the Career Profile and Master Resume:
+Azure, AWS, Azure DevOps, Terraform, Terraform Enterprise, Ansible, Docker,
+Kubernetes, AKS/EKS, Jenkins, Harness, Argo CD, GitLab, GitHub Actions, Git,
+Helm, Splunk, Grafana, Prometheus, Azure Monitor, Log Analytics/KQL,
+Application Insights, CloudWatch, PowerShell, Bash, Python — plus supporting
+technologies represented in the career sources.
+
+**This list is not permanently exhaustive.** Legitimate experience may be
+added later, and the design must accommodate that without rework.
+
 ## 3. Career source model
 
 Three distinct sources, with different authority:
@@ -68,6 +108,26 @@ technically coherent and interview-defensible.
 *Permitted expansion test (mechanically checkable):* every technology, tool,
 platform and role referenced is confirmed in the career profile, AND the
 statement contains no hard factual claim (see Tier 3).
+
+**Tier 2B — SPECIFIC IMPLEMENTATION / PROJECT / OWNERSHIP CLAIM (requires
+stronger evidence).** Confirmed tools alone do NOT authorise inventing a
+specific project. Even with every technology confirmed and no numbers
+present, these require direct career support:
+
+- designed a custom Kubernetes operator
+- built a bespoke internal platform
+- led a major migration
+- architected an enterprise-wide framework
+- created a named internal system
+- led or managed a team
+- owned an entire enterprise architecture
+- any unusually specific implementation or ownership claim
+
+This is the gap Tier 2 would otherwise leave open: "designed a custom
+Kubernetes operator" passes the confirmed-technology test and contains no
+number, yet is a fabricated career fact. It is mechanically detectable
+(creation/leadership/ownership verbs + singular bespoke artifacts) and is
+therefore regression-tested.
 
 **Tier 3 — HARD FACTUAL CLAIM (requires actual support).** Never invent:
 percentages; dollar savings; application/server/user counts; team sizes;
@@ -216,17 +276,22 @@ generate approval prompts — violating §1 and §4. Resolution: document-ground
 verification uses the three-tier model, not V1's two-tier one.
 
 - **PERMITTED_EXPANSION** — all referenced technologies/roles confirmed in the
-  career profile, and no hard factual claim present. Not a defect. No
-  correction, no user prompt.
+  career profile, no hard factual claim, no specific implementation/ownership
+  claim. Not a defect. No correction, no user prompt.
 - **UNSUPPORTED_EXPANSION** — references a technology, tool, employer or role
   not confirmed anywhere in the career sources. Correction required.
+- **UNSUPPORTED_IMPLEMENTATION_CLAIM** — Tier 2B. Specific project, bespoke
+  artifact, leadership or ownership claim without direct career support, even
+  when all technologies are confirmed and no number appears. Correction
+  required.
 - **FABRICATED_FACT** — contains a hard factual claim (Tier 3) without source
-  support. Correction required, always. This is the class the audit exists to
-  catch.
+  support. Correction required, always.
 
-The hard-fact detector is mechanical (numerals, percentages, currency, counts,
-team sizes, durations, dates, superlatives, sole-ownership phrasing) and is
-therefore regression-testable rather than left to prompt adherence.
+Both detectors are mechanical and therefore regression-testable rather than
+left to prompt adherence: the hard-fact detector matches numerals,
+percentages, currency, counts, team sizes, durations, dates and exact-scale
+phrasing; the implementation-claim detector matches creation, leadership and
+sole-ownership verbs applied to bespoke or named artifacts.
 
 **Negative-evidence rule is structural.** Career sources carry an
 `authority` attribute: `profile` (authoritative), `master_resume`

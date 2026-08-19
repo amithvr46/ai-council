@@ -104,6 +104,43 @@ class Step(Base):
     request: Mapped[Request] = relationship(back_populates="steps")
 
 
+class DocumentRow(Base):
+    """Uploaded source material. `authority` decides how it may be used:
+    career sources contribute POSITIVELY to confirmed experience and never
+    negatively (see documents/profile.py); a JD is the target, not evidence."""
+
+    __tablename__ = "documents"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    filename: Mapped[str] = mapped_column(String(255))
+    title: Mapped[str] = mapped_column(String(255), default="")
+    authority: Mapped[str] = mapped_column(String(32), default="supporting")
+    # profile | master_resume | supporting | tailored_resume | jd
+    detected_kind: Mapped[str] = mapped_column(String(16), default="text")
+    text: Mapped[str] = mapped_column(Text)
+    char_count: Mapped[int] = mapped_column(Integer, default=0)
+    truncated: Mapped[bool] = mapped_column(Boolean, default=False)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True, default="")
+
+
+class CareerProfileRow(Base):
+    """Singleton (id=1). The authority on what the user has done — extensible
+    by design, since legitimate experience is added over time."""
+
+    __tablename__ = "career_profile"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    technologies: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    domains: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    roles: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    employers: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    certifications: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    achievements: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+
+
 class BudgetSettingsRow(Base):
     """Singleton row (id=1) holding spend ceilings. Runtime-editable so limits
     can change without a restart."""
@@ -111,7 +148,7 @@ class BudgetSettingsRow(Base):
     __tablename__ = "budget_settings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
-    daily_limit_usd: Mapped[float] = mapped_column(Float, default=5.0)
+    daily_limit_usd: Mapped[float] = mapped_column(Float, default=3.0)
     monthly_limit_usd: Mapped[float] = mapped_column(Float, default=30.0)
     warn_threshold_pct: Mapped[int] = mapped_column(Integer, default=70)
     hard_stop: Mapped[bool] = mapped_column(Boolean, default=True)
