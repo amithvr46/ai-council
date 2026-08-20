@@ -60,6 +60,13 @@ def test_full_chain_applies_to_sqlite(tmp_path):
     assert "conversation_id" in columns("requests")
     # 0008: intent alongside processing mode.
     assert "outcome_kind" in columns("requests")
+    # 0010: durable negative career facts. Without this table a denial only
+    # lives for one request, and "I have never used Harness" has to be repeated
+    # on every resume or the technology comes back.
+    assert "career_denials" in tables
+    assert {"term", "kind", "statement", "active", "superseded_by"} <= columns(
+        "career_denials"
+    )
     # 0009: routing statistics must never mix data populations.
     assert "data_class" in columns("requests")
 

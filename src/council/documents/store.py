@@ -7,6 +7,7 @@ rule to be broken.
 """
 
 import hashlib
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 
@@ -17,6 +18,8 @@ from council.documents.profile import (
     DEFAULT_DOMAINS,
     DEFAULT_TECHNOLOGIES,
     CareerProfile,
+    Denied,
+    normalise,
 )
 
 
@@ -108,6 +111,160 @@ async def career_documents() -> list[dict]:
     async with session_scope() as s:
         rows = (await s.execute(select(DocumentRow))).scalars().all()
         return [{"authority": r.authority, "title": r.title, "text": r.text} for r in rows]
+
+
+# --------------------------------------------------- denials (the boundary)
+
+
+async def load_denials() -> list[Denied]:
+    """Every technology the user has explicitly denied, still in force.
+
+    Superseded rows are excluded here rather than by callers: a caller that
+    forgets is a caller that resurrects a denial the user already corrected.
+    """
+    from council.db.models import CareerDenialRow
+
+    async with session_scope() as s:
+        rows = (
+            await s.execute(
+                select(CareerDenialRow).where(CareerDenialRow.active.is_(True))
+            )
+        ).scalars().all()
+        return [
+            Denied(term=r.term, kind=r.kind, statement=r.statement)
+            for r in sorted(rows, key=lambda r: r.term)
+        ]
+
+
+async def record_denials(denials) -> list[str]:
+    """Persist explicit denials. Returns the terms recorded.
+
+    Re-stating a denial refreshes it rather than duplicating it, and
+    re-stating one that was previously superseded puts it back in force — the
+    user changing their mind twice is still the user.
+    """
+    from council.db.models import CareerDenialRow
+
+    recorded: list[str] = []
+    async with session_scope() as s:
+        for denied in denials:
+            term = normalise(getattr(denied, "term", "") or "")
+            if not term:
+                continue
+            row = await s.get(CareerDenialRow, term)
+            if row is None:
+                row = CareerDenialRow(term=term)
+                s.add(row)
+            row.kind = getattr(denied, "kind", "never_used")
+            row.statement = getattr(denied, "statement", "") or ""
+            row.updated_at = datetime.now(UTC)
+            row.active = True
+            row.superseded_at = None
+            row.superseded_by = ""
+            recorded.append(term)
+    return sorted(set(recorded))
+
+
+async def supersede_denials(terms: list[str], statement: str) -> list[str]:
+    """A later positive user statement overrides an earlier denial.
+
+    The user is the primary source on their own career, and "I have never used
+    Harness" in March does not bind them in September once they have used it.
+    So a positive statement wins over an older denial — but never silently.
+    The row survives with `active=False`, the superseding statement and the
+    time it arrived, so the reversal can still be explained months later.
+
+    Only an explicit statement BY THE USER can do this. A document that
+    mentions the technology cannot, however many times it is re-ingested,
+    because a document mentioning Harness is not the user saying they used it.
+    """
+    from council.db.models import CareerDenialRow
+
+    reversed_terms: list[str] = []
+    async with session_scope() as s:
+        for raw in terms:
+            term = normalise(raw)
+            row = await s.get(CareerDenialRow, term)
+            if row is None or not row.active:
+                continue
+            row.active = False
+            row.superseded_at = datetime.now(UTC)
+            row.superseded_by = statement
+            row.updated_at = datetime.now(UTC)
+            reversed_terms.append(term)
+    return sorted(set(reversed_terms))
+
+
+async def list_denials(active_only: bool = False) -> list[dict]:
+    """The denial ledger, for the audit trail and the CLI."""
+    from council.db.models import CareerDenialRow
+
+    async with session_scope() as s:
+        query = select(CareerDenialRow)
+        if active_only:
+            query = query.where(CareerDenialRow.active.is_(True))
+        rows = (await s.execute(query)).scalars().all()
+        return [
+            {
+                "term": r.term,
+                "kind": r.kind,
+                "statement": r.statement,
+                "active": r.active,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "superseded_at": (
+                    r.superseded_at.isoformat() if r.superseded_at else None
+                ),
+                "superseded_by": r.superseded_by,
+            }
+            for r in sorted(rows, key=lambda r: r.term)
+        ]
+
+
+async def apply_instruction_facts(instruction) -> dict:
+    """Persist the durable career facts one instruction carries, in the right order.
+
+    The ORDER is the whole point, so it lives in one function rather than in
+    each caller:
+
+      1. denials are recorded FIRST, so a request that both denies and claims
+         the same technology resolves to denied. An explicit contradiction
+         inside a single request is a hard boundary, not a race.
+      2. positive claims then supersede any OLDER denial they contradict —
+         excluding anything denied in this same request, per rule 1.
+      3. only positive prose is stored as a career source, by the caller.
+
+    Returns what changed, so the caller can put it in the trace.
+    """
+    denied_now = instruction.denied_terms()
+    denials = [
+        Denied(term=term, kind=kind, statement=instruction.denial_text())
+        for term, kind in denied_now.items()
+    ]
+    recorded = await record_denials(denials) if denials else []
+
+    claimed = [t for t in instruction.claimed_terms() if t not in denied_now]
+    superseded = (
+        await supersede_denials(claimed, instruction.career_text()) if claimed else []
+    )
+    return {
+        "denied": recorded,
+        "superseded": superseded,
+        "denials": [d.as_dict() for d in instruction.denials],
+    }
+
+
+async def confirmed_experience():
+    """The one async path to an assembled ConfirmedExperience.
+
+    Profile, documents and denials are loaded together and handed to
+    `assemble_confirmed` in a single place. Every caller that needs to know
+    what the user has done goes through here, which is what stops a new caller
+    quietly assembling confirmed experience with the denial boundary missing.
+    """
+    from council.documents.profile import assemble_confirmed
+
+    profile = await load_profile()
+    return assemble_confirmed(profile, await career_documents(), await load_denials())
 
 
 # ------------------------------------------------------- 2C persistence

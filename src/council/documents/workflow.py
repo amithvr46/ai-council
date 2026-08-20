@@ -29,7 +29,13 @@ from dataclasses import dataclass, field
 
 from council.documents import style
 from council.documents.claims import ClaimClass, classify
-from council.documents.conflicts import Conflict, disputed_subjects, find_conflicts
+from council.documents.conflicts import (
+    CONFLICT_EXPERIENCE_DENIED,
+    Conflict,
+    denial_conflicts,
+    disputed_subjects,
+    find_conflicts,
+)
 from council.documents.discovery import (
     DISCOVERY_INSTRUCTION,
     DiscoveryCache,
@@ -42,6 +48,7 @@ from council.documents.mirroring import find_mirroring
 from council.documents.profile import (
     CareerProfile,
     ConfirmedExperience,
+    Denied,
     assemble_confirmed,
     detect_role_family,
     mentions,
@@ -143,6 +150,28 @@ class GeneratedResume:
         }
 
 
+def _merge_denials(stored: list | None, instruction: Instruction) -> list[Denied]:
+    """Durable denials plus the ones this request states, this request winning.
+
+    A denial has to bite on the run that states it. "Tailor this for the Azure
+    DevOps role — I have never used Harness" must not produce a Harness bullet
+    and then start behaving next time; that is a defect the user experiences
+    once and stops trusting the system over.
+
+    A positive claim in this request does NOT remove a stored denial here.
+    Superseding is a durable change to the record and belongs with the code
+    that persists it (`store.apply_instruction_facts`), which runs before this
+    and hands back an already-updated `stored` list. Doing it in two places
+    would be two chances to disagree.
+    """
+    merged: dict[str, Denied] = {
+        d.term: d for d in (stored or []) if getattr(d, "term", "")
+    }
+    for term, kind in instruction.denied_terms().items():
+        merged[term] = Denied(term=term, kind=kind, statement=instruction.denial_text())
+    return sorted(merged.values(), key=lambda d: d.term)
+
+
 def _career_context(
     profile: CareerProfile,
     confirmed: ConfirmedExperience,
@@ -169,9 +198,25 @@ def _career_context(
         lines.append(f"established achievements: {'; '.join(profile.achievements)}")
     if profile.notes:
         lines.append(f"notes: {profile.notes}")
-    if conflicts:
+    if confirmed.denied:
+        # Denied technologies are already absent from the truth set above, so
+        # this line is not what enforces the boundary — the assembled set is.
+        # It is here because a model that simply never sees "Harness" may still
+        # reach for it off the JD, whereas a model told the user has explicitly
+        # denied it will not. Naming it is cheaper than hoping.
+        denied = "; ".join(
+            f"{d.term} ({d.kind.replace('_', ' ')})"
+            for d in sorted(confirmed.denied.values(), key=lambda d: d.term)
+        )
+        lines.append(
+            "EXPLICITLY DENIED BY THE USER — these are NOT experience and must "
+            "never appear as skills, bullets or summary claims, no matter how "
+            f"strongly the job description asks for them: {denied}"
+        )
+    material = [c for c in conflicts if c.kind != CONFLICT_EXPERIENCE_DENIED]
+    if material:
         disputed = "; ".join(
-            f"{c.subject} ({' vs '.join(c.distinct_values)})" for c in conflicts
+            f"{c.subject} ({' vs '.join(c.distinct_values)})" for c in material
         )
         lines.append(
             "DISPUTED — career sources disagree on these. Do NOT state them. "
@@ -280,12 +325,17 @@ class ResumeWorkflow:
         *,
         cache: DiscoveryCache | None = None,
         trace: WorkflowTrace | None = None,
+        denials: list | None = None,
     ) -> tuple[JDAnalysis, ConfirmedExperience]:
         """Mechanical, except for one conditional cheap call (A2)."""
         trace = trace or WorkflowTrace()
-        confirmed = assemble_confirmed(profile, documents)
+        confirmed = assemble_confirmed(profile, documents, denials)
         family, emphasis = detect_role_family(jd_text)
-        conflicts = find_conflicts(documents)
+        # A denial that contradicts a career source is a real disagreement and
+        # goes through the same conflict channel as a disputed date. Unlike a
+        # date, its outcome is already decided — the user outranks a document
+        # about their own career — so it is recorded to be seen, not resolved.
+        conflicts = find_conflicts(documents) + denial_conflicts(confirmed)
 
         async def ask_model(candidates: list[str]) -> dict:
             # Discovery is an ENHANCEMENT: it widens gap reporting to terms the
@@ -317,6 +367,7 @@ class ResumeWorkflow:
             gaps=discovery.gaps,
             escalated=discovery.escalated,
             conflicts=len(conflicts),
+            denied=sorted(confirmed.denied),
         )
         return JDAnalysis(family, emphasis, discovery, conflicts), confirmed
 
@@ -524,11 +575,23 @@ class ResumeWorkflow:
         *,
         cache: DiscoveryCache | None = None,
         instruction: str | Instruction | None = None,
+        denials: list | None = None,
     ) -> GeneratedResume:
-        """`instruction` is one natural-language line from the user. Its career
-        statements were already turned into a user_statement career source by
-        the caller; only the request-only preferences reach the writing stages,
-        which is what stops "keep it to 2 pages" becoming a career fact."""
+        """`instruction` is one natural-language line from the user. Its positive
+        career statements were already turned into a user_statement career source
+        by the caller; only the request-only preferences reach the writing stages,
+        which is what stops "keep it to 2 pages" becoming a career fact.
+
+        `denials` is the durable set of technologies the user has explicitly
+        said they have not used. It is passed in rather than read here so the
+        workflow stays free of persistence, but a caller that omits it gets a
+        run without the boundary — which is why the API and CLI both go through
+        `store.confirmed_experience()`/`store.load_denials()` and never
+        assemble the set themselves.
+
+        Denials stated in THIS request are folded in below, so a denial takes
+        effect on the very run that states it rather than only the next one.
+        """
         trace = WorkflowTrace()
         self._sources_blob = _sources_blob(documents)
         self._instruction = (
@@ -538,8 +601,16 @@ class ResumeWorkflow:
         if self._instruction.preferences:
             trace.record("user_preferences", count=len(self._instruction.preferences))
 
+        effective_denials = _merge_denials(denials, self._instruction)
+        if effective_denials:
+            trace.record(
+                "denials_applied",
+                terms=sorted({d.term for d in effective_denials}),
+            )
+
         analysis, confirmed = await self.analyse(
-            jd_text, profile, documents, cache=cache, trace=trace
+            jd_text, profile, documents, cache=cache, trace=trace,
+            denials=effective_denials,
         )
         plan = await self.select(jd_text, analysis, profile, confirmed, trace)
         draft = await self.draft(jd_text, analysis, plan, profile, confirmed, trace)

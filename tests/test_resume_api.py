@@ -294,8 +294,13 @@ def test_a_first_person_request_is_not_a_career_claim():
 
 
 def test_an_empty_instruction_is_harmless():
-    assert parse(None).as_dict() == {"career_statements": [], "preferences": []}
+    assert parse(None).as_dict() == {
+        "career_statements": [],
+        "preferences": [],
+        "denials": [],
+    }
     assert parse("   ").preferences == []
+    assert parse("   ").denials == []
 
 
 def test_preferences_reach_the_prompt_labelled_as_preferences():

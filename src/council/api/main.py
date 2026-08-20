@@ -16,7 +16,6 @@ from council.documents.extract import ExtractionError, extract
 from council.documents.profile import (
     AUTHORITY_JD,
     CAREER_AUTHORITIES,
-    assemble_confirmed,
     detect_role_family,
     scan_jd_technologies,
 )
@@ -559,13 +558,23 @@ class ProfilePatch(BaseModel):
 @app.get("/career-profile")
 async def get_career_profile():
     """The profile plus the assembled confirmed experience, showing which
-    source established each term. Additive only — no source subtracts."""
+    source established each term.
+
+    Documents are additive only — no document subtracts. The one thing that
+    does subtract is the user explicitly saying they have not used something,
+    which is reported separately rather than folded in silently: seeing why a
+    technology is missing matters as much as seeing that it is.
+    """
+    from council.documents.store import confirmed_experience, list_denials
+
     profile = await load_profile()
-    confirmed = assemble_confirmed(profile, await career_documents())
+    confirmed = await confirmed_experience()
     return {
         "profile": profile.as_dict(),
         "confirmed": sorted(confirmed.terms),
         "sources": {k: v for k, v in sorted(confirmed.sources.items())},
+        "denied": {t: d.as_dict() for t, d in sorted(confirmed.denied.items())},
+        "denial_ledger": await list_denials(),
     }
 
 
@@ -584,9 +593,10 @@ async def analyze_jd(body: dict):
     jd_text = body.get("text", "")
     if not jd_text.strip():
         raise HTTPException(status_code=422, detail="jd text required")
+    from council.documents.store import confirmed_experience
+
     family, emphasis = detect_role_family(jd_text)
-    profile = await load_profile()
-    confirmed = assemble_confirmed(profile, await career_documents())
+    confirmed = await confirmed_experience()
     tech_supported, tech_unsupported = scan_jd_technologies(jd_text, confirmed)
     return {
         "role_family": family,
@@ -596,6 +606,9 @@ async def analyze_jd(body: dict):
         # The honest answer to "what does this role want that I can't claim?"
         "technologies_supported": tech_supported,
         "technologies_unsupported": tech_unsupported,
+        # A gap the user has already ruled out. Reporting it as a plain gap
+        # would invite the same question again on the next Azure DevOps JD.
+        "technologies_denied": [t for t in tech_unsupported if confirmed.is_denied(t)],
     }
 
 
@@ -623,6 +636,8 @@ async def generate_resume(body: ResumeBody):
     from council.documents.instructions import parse as parse_instruction
     from council.documents.render import render_docx
     from council.documents.store import (
+        apply_instruction_facts,
+        load_denials,
         load_discovery_cache,
         save_artifact,
         save_conflicts,
@@ -641,20 +656,30 @@ async def generate_resume(body: ResumeBody):
     if not jd_text:
         raise HTTPException(status_code=422, detail="a job description is required")
 
-    # One line of natural language carries two different things. The durable
-    # career facts become a real career source with user_statement provenance;
-    # the request-only preferences never touch the profile.
+    # One line of natural language carries three different things. POSITIVE
+    # career facts become a real career source with user_statement provenance.
+    # NEGATIVE ones become durable per-term denials and are NEVER stored as
+    # career prose — storing them there is precisely what turned "I have never
+    # used Harness" into confirmed Harness experience. Request-only preferences
+    # never touch the profile at all.
     instruction = parse_instruction(body.instruction)
+    facts = await apply_instruction_facts(instruction)
     if instruction.has_career_statements:
         await _store_user_statement(instruction.career_text())
 
     profile = await load_profile()
     documents = await career_documents()
+    denials = await load_denials()
     cache = await load_discovery_cache()
     workflow = build_resume_workflow()
     try:
         result = await workflow.run(
-            jd_text, profile, documents, cache=cache, instruction=instruction
+            jd_text,
+            profile,
+            documents,
+            cache=cache,
+            instruction=instruction,
+            denials=denials,
         )
     except GenerationFailed as e:
         raise HTTPException(status_code=502, detail=str(e)) from None
@@ -680,6 +705,11 @@ async def generate_resume(body: ResumeBody):
             "review": result.review.model_dump() if result.review else None,
             "findings": result.findings,
             "instruction": instruction.as_dict(),
+            # What this request changed about the durable career record. A
+            # denial that took effect, or a denial the user reversed, is a
+            # bigger deal than any wording choice in the document and belongs
+            # in the trace where it can be found later.
+            "career_facts": facts,
             **result.trace.as_dict(),
         },
         cost_usd=result.trace.cost_usd,
@@ -701,14 +731,22 @@ async def generate_resume(body: ResumeBody):
         "model_calls": result.trace.model_calls,
         "download_url": f"/artifacts/{artifact_id}/download",
         "instruction": instruction.as_dict(),
+        "career_facts": facts,
     }
 
 
 async def _store_user_statement(text: str) -> None:
-    """Persist an explicit career statement as its own career source.
+    """Persist an explicit POSITIVE career statement as its own career source.
 
     Kept distinct from document-derived evidence so the sources map can still
     answer "who established this?" honestly.
+
+    POSITIVE is not a caveat, it is the precondition. Whatever reaches this
+    function is scanned for technology names by `assemble_confirmed`, and every
+    name found becomes confirmed professional experience. A negative sentence
+    arriving here would confirm exactly the technologies it denies, which is
+    the defect this whole path was reworked to prevent — so denials are split
+    out by the parser and can never be part of `career_text()`.
     """
     from council.documents.extract import Extracted
     from council.documents.profile import AUTHORITY_USER_STATEMENT

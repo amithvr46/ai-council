@@ -200,17 +200,68 @@ class CareerProfile:
 
 
 @dataclass
+class Denied:
+    """One technology the user has explicitly said they have not used.
+
+    A plain value object with no behaviour: it is carried unchanged from the
+    instruction parser to the audit trail, so the answer to "why is this not
+    confirmed?" is always the user's own words rather than an inference.
+    """
+
+    term: str
+    kind: str  # never_used | not_professional | studied_only
+    statement: str = ""
+
+    def as_dict(self) -> dict:
+        return {"term": self.term, "kind": self.kind, "statement": self.statement}
+
+
+@dataclass
 class ConfirmedExperience:
-    """The assembled confirmed set, plus where each term came from."""
+    """The assembled confirmed set, plus where each term came from.
+
+    THE DENIAL BOUNDARY LIVES HERE, and it is enforced structurally rather
+    than by asking callers to check a second thing:
+
+        a denied term is REMOVED from `terms`.
+
+    That matters because `terms` is read directly in several places — the
+    prompt's truth set, the document-scanning vocabulary, the JD scanner — and
+    a boundary implemented only inside `is_confirmed()` would be bypassed by
+    every one of them. Making the denied term absent from the set means there
+    is no read path that can see it as experience. `denied` keeps the record
+    for audit; `sources` keeps whatever positively claimed it, so the
+    contradiction stays visible instead of being erased.
+    """
 
     terms: set[str] = field(default_factory=set)
     sources: dict[str, list[str]] = field(default_factory=dict)
+    denied: dict[str, Denied] = field(default_factory=dict)
 
     def is_confirmed(self, term: str) -> bool:
-        return normalise(term) in self.terms
+        key = normalise(term)
+        if key in self.denied:
+            return False  # redundant by construction, and deliberately kept
+        return key in self.terms
 
     def unconfirmed(self, terms: list[str]) -> list[str]:
         return [t for t in terms if not self.is_confirmed(t)]
+
+    def denial_kind(self, term: str) -> str | None:
+        entry = self.denied.get(normalise(term))
+        return entry.kind if entry else None
+
+    def is_denied(self, term: str) -> bool:
+        return normalise(term) in self.denied
+
+    def contradicted(self) -> list[str]:
+        """Denied terms that a positive career source had also established.
+
+        These are the real conflicts: a document says the technology is there,
+        the user says it is not. The denial wins for confirmation, but the
+        disagreement is reported rather than quietly dropped.
+        """
+        return sorted(t for t in self.denied if self.sources.get(t))
 
 
 def mentions(text: str, term: str) -> bool:
@@ -225,15 +276,22 @@ _mentions = mentions  # internal callers
 def assemble_confirmed(
     profile: CareerProfile,
     documents: list[dict] | None = None,
+    denials: list | None = None,
 ) -> ConfirmedExperience:
-    """Union of everything any career source establishes.
+    """Union of everything any career source establishes, minus what the user denies.
 
     documents: [{"authority": ..., "title": ..., "text": ...}]
+    denials:   [Denied(...)] — explicit negative statements by the user
 
     Every career authority contributes positively. A tailored resume adds
     what it mentions and NEVER removes what it omits — the rule that lets a
     technology confirmed in the profile survive its absence from last week's
     resume.
+
+    A DENIAL is the one and only thing that subtracts, and it subtracts only
+    because it comes from the user rather than from a document. The two rules
+    are not in tension: "omission is not negative evidence" is about what a
+    document's SILENCE means, and a denial is not silence.
     """
     confirmed = ConfirmedExperience()
 
@@ -278,6 +336,38 @@ def assemble_confirmed(
             if _mentions(text, term):
                 add(term, label)
 
+    return _apply_denials(confirmed, denials)
+
+
+def _apply_denials(
+    confirmed: ConfirmedExperience, denials: list | None
+) -> ConfirmedExperience:
+    """The single chokepoint where an explicit user denial takes effect.
+
+    Every path that produces a ConfirmedExperience ends here, so there is one
+    place to read, one place to test and no way for a downstream consumer to
+    obtain a ConfirmedExperience whose denials were never applied.
+
+    Two things happen, and the second is as important as the first:
+
+      1. the term is removed from `terms`, so no reader can see it as
+         experience — not `is_confirmed`, not the prompt truth set, not the
+         JD scanner
+      2. `sources` is left INTACT. If a career document had established the
+         term, that record survives so the contradiction can be reported
+         through the conflict mechanism. Deleting it would make the denial
+         look uncontested when it is not.
+    """
+    for denied in denials or []:
+        key = normalise(getattr(denied, "term", "") or "")
+        if not key:
+            continue
+        confirmed.terms.discard(key)
+        confirmed.denied[key] = Denied(
+            term=key,
+            kind=getattr(denied, "kind", "never_used"),
+            statement=getattr(denied, "statement", ""),
+        )
     return confirmed
 
 
@@ -341,6 +431,41 @@ def scan_jd_technologies(
     # confirmation wins, since a career source established it.
     unsupported = [t for t in unsupported if t not in supported]
     return sorted(supported), sorted(unsupported)
+
+
+def denial_vocabulary() -> list[str]:
+    """Technology names a denial may name, longest first.
+
+    Technologies only. The user's own stack (DEFAULT_TECHNOLOGIES) plus the
+    names the JD scanner recognises but the career does not claim
+    (FOREIGN_TECHNOLOGIES) — denying GCP has to work even though GCP is not in
+    the career, since that is the common case. Aliases are included so
+    "I never used Azure Kubernetes Service" denies the same thing as
+    "I never used AKS".
+
+    Domain phrases are deliberately excluded: "no automation experience" is a
+    far broader claim than a deterministic matcher should act on, and reading
+    it narrowly would be worse than not reading it at all.
+    """
+    technologies = {normalise(t) for t in DEFAULT_TECHNOLOGIES}
+    technologies |= {t.lower() for t in FOREIGN_TECHNOLOGIES}
+    spellings = set(technologies)
+    spellings |= {a for a, canonical in ALIASES.items() if canonical in technologies}
+    spellings |= set(_JD_ALIASES)
+    return sorted(spellings, key=len, reverse=True)
+
+
+def normalise_denial_term(term: str) -> str:
+    """Canonical name for a denied technology.
+
+    Runs both alias maps, because a denial can name a technology from either
+    vocabulary and the two maps canonicalise different halves of it —
+    "azure kubernetes service" through ALIASES, "google cloud" through the
+    JD aliases. Without both, "I never used Google Cloud" and "I never used
+    GCP" would deny two different things.
+    """
+    key = normalise(term)
+    return _JD_ALIASES.get(key, key)
 
 
 def detect_role_family(jd_text: str) -> tuple[str, list[str]]:

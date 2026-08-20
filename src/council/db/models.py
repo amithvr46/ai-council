@@ -243,6 +243,36 @@ class SourceConflictRow(Base):
     resolved: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class CareerDenialRow(Base):
+    """A technology the user has explicitly said they have not used.
+
+    A durable NEGATIVE career fact, stored per-term rather than as prose. Prose
+    was the defect: a denial kept as text is indistinguishable from a positive
+    career source, and every technology name it contains gets confirmed by the
+    document scanner. Structure is what makes the boundary enforceable.
+
+    Rows are never deleted. A later positive statement from the user supersedes
+    the denial — they are the primary source on their own career and are
+    allowed to correct themselves, or to have learned the technology since —
+    but the superseded row stays with both statements and both timestamps, so
+    the reversal is auditable rather than silent.
+    """
+
+    __tablename__ = "career_denials"
+
+    term: Mapped[str] = mapped_column(String(120), primary_key=True)  # normalised
+    kind: Mapped[str] = mapped_column(String(32), default="never_used")
+    # never_used | not_professional | studied_only
+    statement: Mapped[str] = mapped_column(Text, default="")  # the user's own words
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    superseded_by: Mapped[str] = mapped_column(Text, default="")  # the positive claim
+
+
 class ArtifactRow(Base):
     """A generated document and the trace behind it.
 

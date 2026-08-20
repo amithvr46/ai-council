@@ -29,6 +29,7 @@ REVISION_EVIDENCE: list[tuple[str, list[str], list[str]]] = [
     ("0007", ["technology_cache", "source_conflicts", "artifacts"], []),
     ("0008", [], ["outcome_kind"]),
     ("0009", [], ["data_class"]),
+    ("0010", ["career_denials"], []),
 ]
 
 HEAD = REVISION_EVIDENCE[-1][0]

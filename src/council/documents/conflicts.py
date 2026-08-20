@@ -59,6 +59,14 @@ _CERT_LINE = re.compile(
 
 CONFLICT_KINDS = ("role_dates", "education", "certification")
 
+# A denied technology that a career document also asserts. Kept out of
+# CONFLICT_KINDS because it is not extracted from document text by
+# `find_conflicts` — it comes from the assembled ConfirmedExperience — but it
+# is persisted and surfaced through exactly the same mechanism, which is the
+# point: the user should not have to learn a second place to look for
+# "my sources disagree about my career".
+CONFLICT_EXPERIENCE_DENIED = "experience_denied"
+
 
 def _norm_month_year(value: str) -> str:
     value = re.sub(r"\s+", " ", value.strip().lower().replace(".", ""))
@@ -143,6 +151,33 @@ def find_conflicts(documents: list[dict]) -> list[Conflict]:
                     ],
                 )
             )
+    return conflicts
+
+
+def denial_conflicts(confirmed) -> list[Conflict]:
+    """Where a career source claims a technology the user says they never used.
+
+    This is NOT symmetrical with the date conflicts above. There, two sources
+    of equal standing disagree and the fact is withheld from both. Here the
+    outcome is already decided — the user outranks a document about their own
+    career, so the term stays unconfirmed — and the conflict exists to make
+    that visible and auditable rather than to ask a question.
+
+    Recording it matters because the alternative is silent disagreement: a
+    master resume that lists Harness, a user who says they never used it, and
+    nothing anywhere pointing out that one of the two needs correcting.
+    """
+    conflicts: list[Conflict] = []
+    for term in confirmed.contradicted():
+        denied = confirmed.denied[term]
+        values = [
+            {"source": source, "value": "used"}
+            for source in sorted(confirmed.sources.get(term, []))
+        ]
+        values.append({"source": "user_statement:denied by you", "value": denied.kind})
+        conflicts.append(
+            Conflict(kind=CONFLICT_EXPERIENCE_DENIED, subject=term, values=values)
+        )
     return conflicts
 
 

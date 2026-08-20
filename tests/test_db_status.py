@@ -10,7 +10,7 @@ from council.db.status import HEAD, DbStatus, infer_revision, render
 ALL_TABLES = [
     "requests", "steps", "conversations", "evidence_items", "claim_assessments",
     "budget_settings", "documents", "career_profile", "technology_cache",
-    "source_conflicts", "artifacts",
+    "source_conflicts", "artifacts", "career_denials",
 ]
 ALL_COLUMNS = [
     "id", "conversation_id", "total_api_attempts", "evidence_used",

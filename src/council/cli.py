@@ -10,14 +10,16 @@ from council.documents.extract import ExtractionError, extract
 from council.documents.profile import (
     AUTHORITY_JD,
     CAREER_AUTHORITIES,
-    assemble_confirmed,
     detect_role_family,
     scan_jd_technologies,
 )
 from council.documents.render import render_docx
 from council.documents.store import (
     career_documents,
+    confirmed_experience,
     list_conflicts,
+    list_denials,
+    load_denials,
     load_discovery_cache,
     load_profile,
     resolve_conflict,
@@ -164,11 +166,18 @@ def profile(
 
     async def _run():
         await _ensure_schema()
-        p = await load_profile()
-        return p, assemble_confirmed(p, await career_documents())
+        return await load_profile(), await confirmed_experience()
 
     p, confirmed = asyncio.run(_run())
     typer.echo(f"{len(confirmed.terms)} confirmed terms")
+    if confirmed.denied:
+        typer.echo(
+            "explicitly NOT experience (your own words): "
+            + ", ".join(
+                f"{d.term} ({d.kind.replace('_', ' ')})"
+                for d in sorted(confirmed.denied.values(), key=lambda d: d.term)
+            )
+        )
     if p.employers:
         typer.echo(f"employers: {', '.join(p.employers)}")
     if p.roles:
@@ -223,8 +232,7 @@ def analyze_jd(path: str):
         except ExtractionError as e:
             typer.echo(f"cannot read {file.name}: {e}", err=True)
             raise typer.Exit(1) from None
-        p = await load_profile()
-        return extracted.text, assemble_confirmed(p, await career_documents())
+        return extracted.text, await confirmed_experience()
 
     text, confirmed = asyncio.run(_run())
     family, emphasis = detect_role_family(text)
@@ -236,6 +244,11 @@ def analyze_jd(path: str):
     typer.echo(f"unsupported emphasis: {', '.join(unsupported) or '(none)'}")
     typer.echo(f"JD technologies you have:    {', '.join(tech_supported) or '(none)'}")
     typer.echo(f"JD technologies you do NOT:  {', '.join(tech_unsupported) or '(none)'}")
+    denied_here = [t for t in tech_unsupported if confirmed.is_denied(t)]
+    if denied_here:
+        typer.echo(
+            f"  of those, already ruled out by you: {', '.join(denied_here)}"
+        )
     if unsupported or tech_unsupported:
         typer.echo(
             "\nUnsupported means no career source establishes it. The resume will "
@@ -273,7 +286,9 @@ def generate_resume(
         documents = await career_documents()
         cache = await load_discovery_cache()
         workflow = build_resume_workflow()
-        result = await workflow.run(jd.text, p, documents, cache=cache)
+        result = await workflow.run(
+            jd.text, p, documents, cache=cache, denials=await load_denials()
+        )
         await save_discovery_cache(cache)
         await save_conflicts(result.analysis.conflicts)
         path = render_docx(result.draft, out, name=name, contact=contact)
@@ -345,6 +360,34 @@ def conflicts():
         for v in row["values"] or []:
             typer.echo(f"      {v['value']}  <-  {v['source']}")
         typer.echo(f"    resolve with: council resolve-conflict {row['id']} \"<value>\"")
+
+
+@app.command()
+def denials():
+    """Technologies you have explicitly said you have not used.
+
+    A denial outranks any document that mentions the technology, so nothing
+    listed here can appear on a generated resume. Superseded rows are shown
+    too: a reversal is a change to your career record and should be as
+    inspectable as the denial it replaced.
+    """
+
+    async def _run():
+        await _ensure_schema()
+        return await list_denials()
+
+    rows = asyncio.run(_run())
+    if not rows:
+        typer.echo("no denials recorded")
+        return
+    for row in rows:
+        state = "active" if row["active"] else "superseded"
+        typer.echo(f"[{row['kind']}] {row['term']}  ({state})")
+        if row["statement"]:
+            typer.echo(f"    you said: {row['statement']}")
+        if not row["active"]:
+            typer.echo(f"    later claimed: {row['superseded_by']}")
+            typer.echo(f"    reversed at: {row['superseded_at']}")
 
 
 @app.command("resolve-conflict")
