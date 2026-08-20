@@ -298,10 +298,19 @@ escaped the original implementation entirely.
 
 ## 10. Final commit hash
 
-**Pending.** The desktop bridge to Amith's machine dropped while I was writing
-these files back, so the commit could not be made. Everything above is
-verified in the session workspace; the hash goes here as soon as the machine
-reconnects.
+**`49af7e6`** — "Harden the denial boundary: close the assembly bypass,
+tighten negation". Parent `3ce07fe`. 16 files, +4877 / -70 (2 of those files
+are this packet and the previous one).
+
+All 14 code and test blobs verified byte-identical to the tested content
+(md5 per file, CR-normalised). Working tree clean, `git fsck` clean.
+
+One operational note, since it will recur: the repo is reached through a mount
+that refuses `unlink`, so git cannot remove its own `.git/*.lock` files and
+every operation leaves one that blocks the next. Three stale locks from an
+earlier interrupted run had to be moved aside before this commit would go
+through. They are in `_to_delete/git-locks/` for Amith to remove; nothing in
+the repository was damaged.
 
 ---
 
