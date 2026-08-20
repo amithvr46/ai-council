@@ -16,17 +16,43 @@ ALL_COLUMNS = [
     "id", "conversation_id", "total_api_attempts", "evidence_used",
     "outcome_kind", "data_class",
 ]
+# Columns on tables other than `requests` that a revision is inferred from.
+ALL_TABLE_COLUMNS = {
+    "career_denials": [
+        "term", "kind", "statement", "active", "superseded_by", "history",
+    ],
+}
 
 
-def _status(tables, columns, stamped=None):
+def _status(tables, columns, stamped=None, table_columns=None):
+    table_columns = ALL_TABLE_COLUMNS if table_columns is None else table_columns
     return DbStatus(
         url="sqlite:///x", tables=tables, request_columns=columns,
-        stamped=stamped, inferred=infer_revision(tables, columns),
+        stamped=stamped, inferred=infer_revision(tables, columns, table_columns),
     )
 
 
 def test_a_current_schema_is_recognised():
-    assert infer_revision(ALL_TABLES, ALL_COLUMNS) == HEAD
+    assert infer_revision(ALL_TABLES, ALL_COLUMNS, ALL_TABLE_COLUMNS) == HEAD
+
+
+def test_a_schema_stopped_at_0010_is_not_rounded_up_to_0011():
+    """0011 adds only `career_denials.history`, so its table evidence is
+    identical to 0010's. Without column-level evidence a database missing the
+    audit column would be reported as fully migrated and the user would be told
+    there is nothing to run."""
+    without_history = {
+        "career_denials": [c for c in ALL_TABLE_COLUMNS["career_denials"] if c != "history"]
+    }
+    assert infer_revision(ALL_TABLES, ALL_COLUMNS, without_history) == "0010"
+    assert _status(ALL_TABLES, ALL_COLUMNS, stamped="0010",
+                   table_columns=without_history).advice() == ["alembic upgrade head"]
+
+
+def test_unknown_table_columns_stop_inference_conservatively():
+    """A caller that cannot report the extra columns must not have 0011
+    assumed for it — the same conservative direction as the loop break."""
+    assert infer_revision(ALL_TABLES, ALL_COLUMNS) == "0010"
 
 
 def test_an_empty_database_infers_nothing():

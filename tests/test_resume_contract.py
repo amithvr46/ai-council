@@ -14,6 +14,7 @@ from council.documents.mirroring import find_mirroring, mirrors_jd
 from council.documents.profile import (
     AUTHORITY_MASTER_RESUME,
     AUTHORITY_TAILORED_RESUME,
+    NO_DENIALS,
     CareerProfile,
     assemble_confirmed,
     detect_role_family,
@@ -44,7 +45,7 @@ PLATFORM_JD = (
 
 
 def _confirmed(documents=None):
-    return assemble_confirmed(CareerProfile(), documents)
+    return assemble_confirmed(CareerProfile(), documents, denials=NO_DENIALS)
 
 
 def _workflow(draft: FakeProvider, review: FakeProvider) -> ResumeWorkflow:
@@ -71,6 +72,7 @@ def test_A_jd_technology_never_becomes_career_experience():
     after = assemble_confirmed(
         CareerProfile(),
         [{"authority": "jd", "title": "target", "text": GCP_JD}],
+        denials=NO_DENIALS,
     )
     for term in ("gcp", "gke", "cloud run", "cloud sql"):
         assert not after.is_confirmed(term), term
@@ -129,7 +131,7 @@ def test_B_omission_from_a_tailored_resume_is_not_absence():
             "text": "AWS, EKS and CloudWatch only.",  # mentions none of the above
         },
     ]
-    confirmed = assemble_confirmed(CareerProfile(), documents)
+    confirmed = assemble_confirmed(CareerProfile(), documents, denials=NO_DENIALS)
     for term in ("harness", "ansible", "splunk"):
         assert confirmed.is_confirmed(term), term
     # And the tailored resume still contributed positively.
@@ -141,6 +143,7 @@ def test_B_profile_alone_survives_every_resume_omitting_it():
     confirmed = assemble_confirmed(
         CareerProfile(technologies=["harness"]),
         [{"authority": AUTHORITY_TAILORED_RESUME, "title": "t", "text": "AWS only."}],
+        denials=NO_DENIALS,
     )
     assert confirmed.is_confirmed("harness")
 
@@ -242,7 +245,7 @@ def test_E_role_family_changes_emphasis_not_facts():
     assert set(sre_emphasis) != set(platform_emphasis)
 
     # The career itself is identical in both cases — only presentation moves.
-    assert assemble_confirmed(CareerProfile()).terms == confirmed.terms
+    assert assemble_confirmed(CareerProfile(), denials=NO_DENIALS).terms == confirmed.terms
     assert "incident response" in sre_emphasis
     assert "reusable infrastructure patterns" in platform_emphasis
 

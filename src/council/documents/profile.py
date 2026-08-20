@@ -199,6 +199,17 @@ class CareerProfile:
         }
 
 
+# For callers that have genuinely established there are no denials to apply.
+#
+# Not a convenience alias for None. The point of the empty tuple having a name
+# is that `denials=NO_DENIALS` is a claim the author made and a reviewer can
+# challenge, whereas an omitted argument is invisible. Anywhere this appears
+# outside a test, the question to ask is "how do you know?" — in production
+# code the answer should almost always be that the denials were loaded, and
+# this constant should not be there at all.
+NO_DENIALS: tuple = ()
+
+
 @dataclass
 class Denied:
     """One technology the user has explicitly said they have not used.
@@ -276,12 +287,14 @@ _mentions = mentions  # internal callers
 def assemble_confirmed(
     profile: CareerProfile,
     documents: list[dict] | None = None,
-    denials: list | None = None,
+    *,
+    denials: list,
 ) -> ConfirmedExperience:
     """Union of everything any career source establishes, minus what the user denies.
 
     documents: [{"authority": ..., "title": ..., "text": ...}]
-    denials:   [Denied(...)] — explicit negative statements by the user
+    denials:   [Denied(...)] — explicit negative statements by the user.
+               REQUIRED and KEYWORD-ONLY. See below.
 
     Every career authority contributes positively. A tailored resume adds
     what it mentions and NEVER removes what it omits — the rule that lets a
@@ -292,6 +305,22 @@ def assemble_confirmed(
     because it comes from the user rather than from a document. The two rules
     are not in tension: "omission is not negative evidence" is about what a
     document's SILENCE means, and a denial is not silence.
+
+    WHY `denials` HAS NO DEFAULT
+    ----------------------------
+    It used to default to None, which meant `assemble_confirmed(profile, docs)`
+    silently produced a truth set with the denial boundary switched off. Every
+    caller in the tree happened to be correct, so nothing was broken — but the
+    boundary depended on developers remembering, and a permanent truth boundary
+    should not be one forgotten argument away from disappearing.
+
+    Keyword-only rather than merely positional-required, because the word
+    "denials" then has to appear at every call site. A reader of any call can
+    see whether the boundary was applied without opening this file, and
+    `grep -rn 'denials='` enumerates every place the question was answered.
+
+    Callers with genuinely nothing to pass write `denials=NO_DENIALS`, which is
+    an assertion rather than an omission — see that constant.
     """
     confirmed = ConfirmedExperience()
 

@@ -329,7 +329,7 @@ class ResumeWorkflow:
     ) -> tuple[JDAnalysis, ConfirmedExperience]:
         """Mechanical, except for one conditional cheap call (A2)."""
         trace = trace or WorkflowTrace()
-        confirmed = assemble_confirmed(profile, documents, denials)
+        confirmed = assemble_confirmed(profile, documents, denials=denials)
         family, emphasis = detect_role_family(jd_text)
         # A denial that contradicts a career source is a real disagreement and
         # goes through the same conflict channel as a disputed date. Unlike a

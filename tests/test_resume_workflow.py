@@ -15,7 +15,7 @@ from council.documents.discovery import (
     discover,
     known_vocabulary,
 )
-from council.documents.profile import CareerProfile, assemble_confirmed
+from council.documents.profile import NO_DENIALS, CareerProfile, assemble_confirmed
 from council.documents.schemas import (
     ExperienceSelection,
     ResumeDraft,
@@ -39,7 +39,7 @@ GCP_JD = (
 
 
 def _confirmed():
-    return assemble_confirmed(CareerProfile())
+    return assemble_confirmed(CareerProfile(), denials=NO_DENIALS)
 
 
 # ---------------------------------------------- A5: invented relationships
@@ -152,6 +152,7 @@ async def test_discovered_technology_is_supported_only_when_career_evidence_exis
     confirmed = assemble_confirmed(
         CareerProfile(technologies=["quantumdeploy"]),
         [{"authority": "master_resume", "title": "r", "text": "Ran Quantumdeploy releases."}],
+        denials=NO_DENIALS,
     )
 
     async def ask(candidates):

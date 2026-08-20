@@ -256,6 +256,11 @@ class CareerDenialRow(Base):
     allowed to correct themselves, or to have learned the technology since —
     but the superseded row stays with both statements and both timestamps, so
     the reversal is auditable rather than silent.
+
+    The scalar columns describe CURRENT state. `history` is append-only and
+    describes how that state was reached: a user who denies, then claims, then
+    denies again ends in the same state as one who simply denied, and the two
+    are not the same situation. Without history the middle statement vanished.
     """
 
     __tablename__ = "career_denials"
@@ -271,6 +276,8 @@ class CareerDenialRow(Base):
         DateTime(timezone=True), nullable=True
     )
     superseded_by: Mapped[str] = mapped_column(Text, default="")  # the positive claim
+    # [{"at": iso8601, "action": "denied"|"superseded", "kind": ..., "statement": ...}]
+    history: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
 class ArtifactRow(Base):

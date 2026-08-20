@@ -155,14 +155,31 @@ async def record_denials(denials) -> list[str]:
             if row is None:
                 row = CareerDenialRow(term=term)
                 s.add(row)
-            row.kind = getattr(denied, "kind", "never_used")
-            row.statement = getattr(denied, "statement", "") or ""
-            row.updated_at = datetime.now(UTC)
+            kind = getattr(denied, "kind", "never_used")
+            statement = getattr(denied, "statement", "") or ""
+            now = datetime.now(UTC)
+            row.kind = kind
+            row.statement = statement
+            row.updated_at = now
+            # Back in force. The scalar reversal fields describe CURRENT state
+            # and so are cleared, which is exactly why the transition has to be
+            # appended to history first — otherwise re-denying erases the fact
+            # that the user ever claimed the technology.
+            _append_history(row, now, "denied", kind=kind, statement=statement)
             row.active = True
             row.superseded_at = None
             row.superseded_by = ""
             recorded.append(term)
     return sorted(set(recorded))
+
+
+def _append_history(row, at, action: str, **detail) -> None:
+    """Append one transition. Reassigns the list because SQLAlchemy does not
+    track in-place mutation of a plain JSON column, and a silently unsaved
+    audit trail is worse than none."""
+    row.history = (row.history or []) + [
+        {"at": at.isoformat(), "action": action, **detail}
+    ]
 
 
 async def supersede_denials(terms: list[str], statement: str) -> list[str]:
@@ -187,10 +204,12 @@ async def supersede_denials(terms: list[str], statement: str) -> list[str]:
             row = await s.get(CareerDenialRow, term)
             if row is None or not row.active:
                 continue
+            now = datetime.now(UTC)
             row.active = False
-            row.superseded_at = datetime.now(UTC)
+            row.superseded_at = now
             row.superseded_by = statement
-            row.updated_at = datetime.now(UTC)
+            row.updated_at = now
+            _append_history(row, now, "superseded", statement=statement)
             reversed_terms.append(term)
     return sorted(set(reversed_terms))
 
@@ -215,6 +234,7 @@ async def list_denials(active_only: bool = False) -> list[dict]:
                     r.superseded_at.isoformat() if r.superseded_at else None
                 ),
                 "superseded_by": r.superseded_by,
+                "history": r.history or [],
             }
             for r in sorted(rows, key=lambda r: r.term)
         ]
@@ -264,7 +284,9 @@ async def confirmed_experience():
     from council.documents.profile import assemble_confirmed
 
     profile = await load_profile()
-    return assemble_confirmed(profile, await career_documents(), await load_denials())
+    return assemble_confirmed(
+        profile, await career_documents(), denials=await load_denials()
+    )
 
 
 # ------------------------------------------------------- 2C persistence

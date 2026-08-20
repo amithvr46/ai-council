@@ -67,6 +67,9 @@ def test_full_chain_applies_to_sqlite(tmp_path):
     assert {"term", "kind", "statement", "active", "superseded_by"} <= columns(
         "career_denials"
     )
+    # 0011: append-only transition log. Without it, re-denying a technology
+    # cleared `superseded_by` and the user's intervening claim vanished.
+    assert "history" in columns("career_denials")
     # 0009: routing statistics must never mix data populations.
     assert "data_class" in columns("requests")
 

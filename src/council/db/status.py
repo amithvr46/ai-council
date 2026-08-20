@@ -30,7 +30,19 @@ REVISION_EVIDENCE: list[tuple[str, list[str], list[str]]] = [
     ("0008", [], ["outcome_kind"]),
     ("0009", [], ["data_class"]),
     ("0010", ["career_denials"], []),
+    ("0011", ["career_denials"], []),
 ]
+
+# Revisions whose only evidence is a column on a table OTHER than `requests`.
+#
+# The list above can express "this table exists" and "this column exists on
+# requests", which covered every revision up to 0010. 0011 adds
+# career_denials.history and nothing else, so without this map it would have
+# exactly the same evidence as 0010 — and a database stopped at 0010 would be
+# reported as fully migrated while silently missing the audit column.
+REVISION_COLUMN_EVIDENCE: dict[str, tuple[str, str]] = {
+    "0011": ("career_denials", "history"),
+}
 
 HEAD = REVISION_EVIDENCE[-1][0]
 
@@ -72,20 +84,34 @@ class DbStatus:
         return []
 
 
-def infer_revision(tables: list[str], request_columns: list[str]) -> str | None:
+def infer_revision(
+    tables: list[str],
+    request_columns: list[str],
+    table_columns: dict[str, list[str]] | None = None,
+) -> str | None:
     """The newest revision whose evidence is fully present.
 
     Conservative by design: it stops at the first revision that is not fully
     satisfied, so a partially-applied schema is reported as the last COMPLETE
     revision rather than optimistically rounded up.
+
+    `table_columns` is {table: [columns]} for the tables named in
+    REVISION_COLUMN_EVIDENCE. Omitting it means those revisions cannot be
+    confirmed and inference stops before them — the conservative direction, and
+    the same reason the loop breaks rather than continuing.
     """
     have_tables, have_columns = set(tables), set(request_columns)
+    have_table_columns = {t: set(c) for t, c in (table_columns or {}).items()}
     inferred = None
     for revision, needed_tables, needed_columns in REVISION_EVIDENCE:
-        if set(needed_tables) <= have_tables and set(needed_columns) <= have_columns:
-            inferred = revision
-        else:
+        if not (set(needed_tables) <= have_tables and set(needed_columns) <= have_columns):
             break
+        extra = REVISION_COLUMN_EVIDENCE.get(revision)
+        if extra is not None:
+            table, column = extra
+            if column not in have_table_columns.get(table, set()):
+                break
+        inferred = revision
     return inferred
 
 
@@ -98,6 +124,12 @@ async def collect() -> DbStatus:
             columns = await conn.run_sync(
                 lambda c: [col["name"] for col in inspect(c).get_columns("requests")]
             )
+        table_columns: dict[str, list[str]] = {}
+        for table, _ in REVISION_COLUMN_EVIDENCE.values():
+            if table in tables and table not in table_columns:
+                table_columns[table] = await conn.run_sync(
+                    lambda c, t=table: [col["name"] for col in inspect(c).get_columns(t)]
+                )
         stamped = None
         if "alembic_version" in tables:
             row = (await conn.execute(text("select version_num from alembic_version"))).first()
@@ -108,7 +140,7 @@ async def collect() -> DbStatus:
         tables=[t for t in tables if t != "alembic_version"],
         request_columns=columns,
         stamped=stamped,
-        inferred=infer_revision(tables, columns),
+        inferred=infer_revision(tables, columns, table_columns),
     )
 
 

@@ -17,6 +17,7 @@ from council.documents.profile import (
     AUTHORITY_PROFILE,
     AUTHORITY_TAILORED_RESUME,
     AUTHORITY_USER_STATEMENT,
+    NO_DENIALS,
     CareerProfile,
     assemble_confirmed,
     detect_role_family,
@@ -37,7 +38,7 @@ def test_tailored_resume_omission_is_not_evidence_of_absence():
         # Deliberately does NOT mention Harness — that JD did not need it.
         "text": "Built Terraform modules for Azure infrastructure and AKS clusters.",
     }
-    confirmed = assemble_confirmed(profile, [yesterdays_resume])
+    confirmed = assemble_confirmed(profile, [yesterdays_resume], denials=NO_DENIALS)
     assert confirmed.is_confirmed("harness"), (
         "omission from a tailored resume must not remove confirmed experience"
     )
@@ -50,7 +51,7 @@ def test_a_tailored_resume_can_still_add_positively():
         "title": "old",
         "text": "Managed Azure and Terraform infrastructure.",
     }
-    confirmed = assemble_confirmed(profile, [resume])
+    confirmed = assemble_confirmed(profile, [resume], denials=NO_DENIALS)
     assert confirmed.is_confirmed("terraform")
     assert AUTHORITY_PROFILE in confirmed.sources["azure"]
 
@@ -63,7 +64,7 @@ def test_a_jd_is_never_career_evidence():
         "title": "target",
         "text": "Requires deep Kubernetes, Harness and Argo CD experience.",
     }
-    confirmed = assemble_confirmed(profile, [jd])
+    confirmed = assemble_confirmed(profile, [jd], denials=NO_DENIALS)
     assert not confirmed.is_confirmed("harness")
     assert not confirmed.is_confirmed("argo cd")
 
@@ -75,21 +76,21 @@ def test_master_resume_contributes_and_is_attributed():
         "title": "master",
         "text": "Jenkins pipelines, Splunk dashboards and Ansible playbooks.",
     }
-    confirmed = assemble_confirmed(profile, [master])
+    confirmed = assemble_confirmed(profile, [master], denials=NO_DENIALS)
     assert confirmed.is_confirmed("jenkins")
     assert any("master" in s for s in confirmed.sources["jenkins"])
 
 
 def test_aliases_resolve_to_one_confirmed_term():
     profile = CareerProfile(technologies=["aks", "kubernetes"])
-    confirmed = assemble_confirmed(profile, [])
+    confirmed = assemble_confirmed(profile, [], denials=NO_DENIALS)
     assert confirmed.is_confirmed("Azure Kubernetes Service")
     assert confirmed.is_confirmed("K8s")
 
 
 def test_unconfirmed_terms_are_reported():
     profile = CareerProfile(technologies=["azure", "terraform"])
-    confirmed = assemble_confirmed(profile, [])
+    confirmed = assemble_confirmed(profile, [], denials=NO_DENIALS)
     assert confirmed.unconfirmed(["Terraform", "Pulumi", "Azure"]) == ["Pulumi"]
 
 
@@ -371,7 +372,7 @@ def test_truncation_is_reported():
 
 
 def _baseline() -> object:
-    return assemble_confirmed(CareerProfile())
+    return assemble_confirmed(CareerProfile(), denials=NO_DENIALS)
 
 
 def test_jd_technology_the_career_lacks_is_reported_unsupported():
@@ -411,6 +412,7 @@ def test_jd_scanner_credits_a_technology_a_career_source_established():
     confirmed = assemble_confirmed(
         CareerProfile(technologies=["datadog"]),
         [{"authority": AUTHORITY_MASTER_RESUME, "title": "r", "text": "Datadog monitors."}],
+        denials=NO_DENIALS,
     )
     supported, unsupported = scan_jd_technologies(jd, confirmed)
     assert "datadog" in supported
@@ -433,6 +435,7 @@ def test_key_vault_does_not_confirm_hashicorp_vault():
     confirmed = assemble_confirmed(
         CareerProfile(technologies=[], domains=[]),
         [{"authority": AUTHORITY_MASTER_RESUME, "title": "r", "text": "Used Azure Key Vault."}],
+        denials=NO_DENIALS,
     )
     assert confirmed.is_confirmed("key vault")
     assert not confirmed.is_confirmed("hashicorp vault")
@@ -460,6 +463,7 @@ def test_user_statement_is_a_career_authority_distinct_from_documents():
                 "text": "Terraform across Azure environments.",
             },
         ],
+        denials=NO_DENIALS,
     )
     assert confirmed.is_confirmed("harness")
     assert confirmed.is_confirmed("argo cd")
@@ -481,7 +485,9 @@ def test_a_user_statement_never_subtracts_either():
         },
         {"authority": AUTHORITY_USER_STATEMENT, "title": "stated", "text": "I use Harness."},
     ]
-    confirmed = assemble_confirmed(CareerProfile(technologies=[], domains=[]), documents)
+    confirmed = assemble_confirmed(
+        CareerProfile(technologies=[], domains=[]), documents, denials=NO_DENIALS
+    )
     assert {"jenkins", "splunk", "harness"} <= confirmed.terms
 
 
@@ -491,5 +497,6 @@ def test_a_jd_is_still_not_a_user_statement():
     confirmed = assemble_confirmed(
         CareerProfile(technologies=[], domains=[]),
         [{"authority": AUTHORITY_JD, "title": "target", "text": "Requires Harness."}],
+        denials=NO_DENIALS,
     )
     assert not confirmed.is_confirmed("harness")

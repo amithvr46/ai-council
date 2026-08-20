@@ -43,6 +43,7 @@ from council.documents.instructions import (
 from council.documents.profile import (
     AUTHORITY_MASTER_RESUME,
     AUTHORITY_USER_STATEMENT,
+    NO_DENIALS,
     CareerProfile,
     Denied,
     assemble_confirmed,
@@ -251,7 +252,7 @@ def _confirmed_after(statement: str, document_text: str = "") -> object:
         Denied(term=t, kind=k, statement=statement)
         for t, k in parsed.denied_terms().items()
     ]
-    return assemble_confirmed(_profile(), documents, denials)
+    return assemble_confirmed(_profile(), documents, denials=denials)
 
 
 def test_never_used_harness_does_not_confirm_harness():
@@ -398,7 +399,7 @@ def test_assemble_confirmed_without_denials_is_unchanged():
             "text": "Terraform and Harness.",
         }
     ]
-    confirmed = assemble_confirmed(_profile(), documents)
+    confirmed = assemble_confirmed(_profile(), documents, denials=NO_DENIALS)
     assert confirmed.is_confirmed("harness") is True
     assert confirmed.denied == {}
 
