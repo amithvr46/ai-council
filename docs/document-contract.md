@@ -534,3 +534,154 @@ the user would realistically consider submitting.
 
 The goal is not "match every JD keyword". The goal is the strongest truthful
 and technically defensible representation of this career for this opportunity.
+
+---
+
+# Amendment B — resume quality (frozen 2026-08-21, NOT YET IMPLEMENTED)
+
+A core requirement for the `resume_tailor` outcome. **Recorded only.** Nothing
+here is built, and its design and phase are decided after the pending Auto
+review — not before.
+
+It exists because the correctness work of August 2026 (denial boundary,
+positive confirmation, technology vocabulary) established what the system may
+*say*. This amendment is about whether what it says is any *good*. Both are
+required. Neither substitutes for the other.
+
+## B1. Three audiences at once
+
+A tailored resume is not successful because it contains JD keywords. It has to
+work for three readers simultaneously, and the third is the hardest.
+
+**ATS.** Relevant role terminology, technologies, responsibilities and JD
+concepts appear naturally, so the candidate is discoverable and ranks
+appropriately. Not keyword stuffing — see A8, which already forbids it.
+
+**Recruiter or vendor, on a five-to-ten second scan.** The document must
+immediately communicate correct role identity, appropriate seniority, relevant
+cloud/platform/tooling background, strong recent experience, obvious alignment
+with the opening, and clean professional presentation. The reaction to aim for:
+
+> "This candidate clearly fits what we're looking for. I should speak with
+> them."
+
+**Technical hiring manager or client.** The strongest qualitative requirement.
+After reading the experience, the reader should feel:
+
+> "This engineer has actually done this kind of work in real environments."
+
+Which means the resume communicates EXPERIENCE, not a list of technologies.
+
+## B2. An employment or project section tells an engineering story
+
+Bullets are not independent keyword containers. A recent section, read as a
+whole, should let the reader follow:
+
+    environment -> responsibility -> implementation -> operations
+                -> troubleshooting -> outcome
+
+No single bullet needs all six. The SECTION should convey what kind of
+environment the engineer worked in, what they owned or supported, what they
+built, automated, deployed or operated, how the technologies were actually
+used, how those technologies fit together, what production and operational
+responsibility existed, how problems were investigated and resolved, and what
+useful outcome resulted where one is established.
+
+Weak:
+
+> "Worked with AKS, Terraform, Azure Monitor and CI/CD."
+
+Names tools. Demonstrates almost nothing.
+
+Stronger:
+
+> "Managed AKS-based application environments through Terraform, supporting
+> deployment, configuration and infrastructure changes across production Azure
+> environments while troubleshooting pod, networking and dependency issues
+> during releases."
+
+The wording is not a template to copy. The test is whether the reader can
+picture an engineer performing the work.
+
+**This is the part a bullet-by-bullet check cannot catch.** A set of
+individually acceptable bullets can still produce an incoherent section.
+
+## B3. Seniority shows through the work, not through adjectives
+
+An experienced Cloud/DevOps/SRE/Platform engineer must not receive
+junior-looking bullets:
+
+> "Used Terraform." / "Worked with Kubernetes." / "Used Grafana for monitoring."
+
+Where career truth supports it, the writing should demonstrate ownership,
+implementation, automation, production responsibility, troubleshooting,
+engineering judgment, platform interaction, operational responsibility and
+cross-system understanding.
+
+Never compensate with inflated adjectives. "Expert", "highly skilled",
+"mission-critical" are banned by A8 and remain so. Seniority emerges from what
+the engineer did.
+
+## B4. Better writing is not permission to fabricate
+
+Amendment B raises the quality bar and changes the truth boundary not at all.
+Still never invented: technologies the user has not established, projects,
+responsibilities, metrics, scale, accomplishments, incidents, architecture,
+relationships between technologies that are not reasonably supported, business
+impact that is not established.
+
+The governing rule is unchanged:
+
+> The user and the career sources establish truth.
+> Council performs selection, professional expression and tailoring.
+
+This amendment interacts directly with A5 (confirmed tools do not confirm every
+relationship) and A6 (four-level claim policy). Where B2's narrative pull and
+A5's restraint conflict, **A5 wins** — a coherent story is not a licence to
+connect two technologies the career never connected.
+
+## B5. JD alignment is semantic, not mechanical
+
+Council should understand what the employer actually needs, find the strongest
+relevant confirmed experience in the career history, and frame that experience
+so the connection is obvious to the reader.
+
+The result should read as:
+
+> "This person's actual career happens to fit this opening very well."
+
+and never as:
+
+> "AI inserted the job description into this person's resume."
+
+Match percentage and keyword coverage must never become the definition of
+quality. They are advisory signals, per §7 of the contract.
+
+## B6. The eventual quality gate
+
+When the evaluation is designed — later, not now — it should cover at minimum:
+
+    truthfulness, JD relevance, ATS coverage, recruiter scan quality,
+    hiring-manager credibility, project coherence, seniority expression,
+    writing quality
+
+**Recent employment and project sections must be evaluated as coherent
+sections, not only bullet by bullet.** That is the requirement most likely to
+be lost in implementation, and B2 is why it matters.
+
+Do not build a large evaluator. The scope, method and phase are open questions.
+
+## B7. Product experience
+
+Unchanged and restated because it is what all of this serves:
+
+    career source(s) + JD + optional natural-language instructions
+      -> strong, truthful, professionally tailored resume
+
+The user should never need to understand Career Profile internals, vocabulary
+lists, denial logic or prompt architecture. That complexity is ours.
+
+## B8. Status
+
+Recorded 2026-08-21. Not implemented, not scheduled. Sequencing decision comes
+after the pending Auto evaluation review.
