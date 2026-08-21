@@ -40,7 +40,7 @@ in ways nobody can predict, and this boundary has to be predictable.
 import re
 from dataclasses import dataclass, field
 
-from council.documents.profile import denial_vocabulary, normalise_denial_term
+from council.documents.profile import canonical_technology, technology_vocabulary
 
 # First-person claims about what the user has actually done.
 _EXPERIENCE_VERB = (
@@ -319,7 +319,7 @@ def technology_terms(sentence: str) -> list[str]:
     """
     found: list[str] = []
     remaining = sentence
-    for term in denial_vocabulary():  # longest first
+    for term in technology_vocabulary():  # longest first
         pattern = rf"(?<![\w-]){re.escape(term)}(?![\w-])"
         if not re.search(pattern, remaining, re.I):
             continue
@@ -327,7 +327,7 @@ def technology_terms(sentence: str) -> list[str]:
         remaining = re.sub(
             pattern, lambda m: " " * len(m.group()), remaining, flags=re.I
         )
-        canonical = normalise_denial_term(term)
+        canonical = canonical_technology(term)
         if canonical and canonical not in found:
             found.append(canonical)
     return sorted(found)

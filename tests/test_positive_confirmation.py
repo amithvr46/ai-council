@@ -266,29 +266,21 @@ async def test_a_document_that_mentions_a_third_partys_technology_is_unaffected(
     assert "user_statement" not in str(confirmed.sources.get("terraform", []))
 
 
-async def test_a_stated_technology_outside_the_baseline_vocabulary_is_not_confirmed(db):
-    """PRE-EXISTING GAP, recorded rather than fixed. Not caused by this patch.
+async def test_a_stated_technology_outside_the_baseline_vocabulary_is_confirmed(db):
+    """The gap this file recorded, now closed.
 
-    "I used GCP professionally at my last company" is parsed correctly as an
-    explicit first-person career statement, and `claimed_terms()` returns
-    ["gcp"] — the denial vocabulary knows the term. But confirmation scans
-    career sources against DEFAULT_TECHNOLOGIES, which does not contain "gcp",
-    so the technology never becomes confirmed experience.
+    Written as a deliberately failing-when-fixed assertion in the previous
+    patch: confirmation scanned DEFAULT_TECHNOLOGIES while denial used the
+    broader vocabulary, so "I used GCP professionally" parsed correctly, was
+    stored as a career source, and established nothing.
 
-    The user therefore cannot establish a technology outside the baseline list
-    by stating it plainly. That works against the product goal — provide your
-    career information and Council understands it — and it is why GCP could
-    not be used as a positive control in this file.
-
-    This test asserts CURRENT behaviour so the gap is visible and a future fix
-    has something to flip. It is deliberately not fixed here: it belongs to the
-    confirmation-vocabulary / technology-discovery path, not to instruction
-    classification, and this patch was scoped to the latter.
+    Full coverage of the fix is in tests/test_technology_vocabulary.py; this
+    one stays here because it is the assertion that was inverted.
     """
     claim = "I used GCP professionally at my last company."
     parsed = parse(claim)
-    assert parsed.career_statements == [claim]  # classified correctly
-    assert parsed.claimed_terms() == ["gcp"]  # the term is recognised
+    assert parsed.career_statements == [claim]
+    assert parsed.claimed_terms() == ["gcp"]
 
     await store_document(
         filename="user-statement.txt",
@@ -299,7 +291,7 @@ async def test_a_stated_technology_outside_the_baseline_vocabulary_is_not_confir
         ),
     )
     await apply_instruction_facts(parsed)
-    assert (await confirmed_experience()).is_confirmed("gcp") is False  # the gap
+    assert (await confirmed_experience()).is_confirmed("gcp") is True
 
 
 async def test_the_denial_boundary_is_untouched(db):

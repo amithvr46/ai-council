@@ -325,7 +325,11 @@ def assemble_confirmed(
     confirmed = ConfirmedExperience()
 
     def add(term: str, source: str) -> None:
-        key = normalise(term)
+        # `canonical_technology`, not `normalise` — the SAME canonicalisation
+        # denial extraction uses. With two different ones, a document
+        # establishing "Google Cloud Platform" and a denial of "GCP" key
+        # different entries and the denial silently fails to remove the claim.
+        key = canonical_technology(term)
         if not key:
             return
         confirmed.terms.add(key)
@@ -343,13 +347,27 @@ def assemble_confirmed(
         add(term, AUTHORITY_PROFILE)
 
     # Documents can only ADD, never remove. The searched vocabulary is the
-    # baseline technology/domain list UNION whatever the profile adds — not
-    # just the profile's own terms. The master resume is itself a career
-    # source (contract §3), so it must be able to establish a technology the
-    # profile has not listed yet rather than being silently unable to.
+    # full technology vocabulary UNION the domains UNION whatever the profile
+    # adds — not just the profile's own terms. The master resume is itself a
+    # career source (contract §3), so it must be able to establish a technology
+    # the profile has not listed yet rather than being silently unable to.
+    #
+    # `technology_vocabulary()` is the same list denial extraction uses, and
+    # that is the point. It used to be DEFAULT_TECHNOLOGIES only, which meant
+    # the 62 names in FOREIGN_TECHNOLOGIES could be DENIED but never CONFIRMED:
+    #
+    #     "I used GCP professionally."  -> parsed correctly as a career
+    #                                      statement, claimed_terms() == ["gcp"]
+    #                                   -> stored as a career source
+    #                                   -> scanned against a vocabulary with no
+    #                                      "gcp" in it
+    #                                   -> silently established nothing
+    #
+    # The user could state a true fact and watch it vanish. One vocabulary for
+    # both directions is what stops the two halves of career truth disagreeing.
     vocabulary = sorted(
         confirmed.terms
-        | {normalise(t) for t in DEFAULT_TECHNOLOGIES}
+        | set(technology_vocabulary())
         | {normalise(d) for d in DEFAULT_DOMAINS}
         | set(ALIASES),
         key=len,
@@ -388,7 +406,9 @@ def _apply_denials(
          look uncontested when it is not.
     """
     for denied in denials or []:
-        key = normalise(getattr(denied, "term", "") or "")
+        # Same canonicalisation as `add`, so a denial naming "Google Cloud"
+        # removes what a document established as "GCP".
+        key = canonical_technology(getattr(denied, "term", "") or "")
         if not key:
             continue
         confirmed.terms.discard(key)
@@ -462,19 +482,27 @@ def scan_jd_technologies(
     return sorted(supported), sorted(unsupported)
 
 
-def denial_vocabulary() -> list[str]:
-    """Technology names a denial may name, longest first.
+def technology_vocabulary() -> list[str]:
+    """Every technology name the system can recognise, longest first.
 
-    Technologies only. The user's own stack (DEFAULT_TECHNOLOGIES) plus the
-    names the JD scanner recognises but the career does not claim
-    (FOREIGN_TECHNOLOGIES) — denying GCP has to work even though GCP is not in
-    the career, since that is the common case. Aliases are included so
-    "I never used Azure Kubernetes Service" denies the same thing as
-    "I never used AKS".
+    ONE vocabulary, used by both sides of career truth: what a denial may
+    name, and what a career source may establish. They were separate lists
+    until Aug 21 2026, and the split was a live defect — see
+    `assemble_confirmed` for what it cost.
 
-    Domain phrases are deliberately excluded: "no automation experience" is a
-    far broader claim than a deterministic matcher should act on, and reading
-    it narrowly would be worse than not reading it at all.
+    The user's own stack (DEFAULT_TECHNOLOGIES) plus the names the JD scanner
+    recognises but the career does not claim (FOREIGN_TECHNOLOGIES). Both
+    halves are needed in both directions: denying GCP has to work even though
+    GCP is not in the baseline career, and so does CLAIMING it.
+
+    Aliases are included so "Azure Kubernetes Service" and "AKS" are the same
+    technology whichever way the user refers to it.
+
+    Domain phrases are deliberately excluded, and that exclusion is asymmetric
+    on purpose. A career source mentioning "automation" reasonably establishes
+    the domain, so `assemble_confirmed` searches domains as well. But "no
+    automation experience" is a far broader claim than a deterministic matcher
+    should act on, so denial stays technology-only.
     """
     technologies = {normalise(t) for t in DEFAULT_TECHNOLOGIES}
     technologies |= {t.lower() for t in FOREIGN_TECHNOLOGIES}
@@ -484,17 +512,36 @@ def denial_vocabulary() -> list[str]:
     return sorted(spellings, key=len, reverse=True)
 
 
-def normalise_denial_term(term: str) -> str:
-    """Canonical name for a denied technology.
+def denial_vocabulary() -> list[str]:
+    """Deprecated name for `technology_vocabulary`.
 
-    Runs both alias maps, because a denial can name a technology from either
-    vocabulary and the two maps canonicalise different halves of it —
-    "azure kubernetes service" through ALIASES, "google cloud" through the
-    JD aliases. Without both, "I never used Google Cloud" and "I never used
-    GCP" would deny two different things.
+    Kept because the name appears in the negation tests and reads correctly
+    at those call sites. There is only one vocabulary now.
+    """
+    return technology_vocabulary()
+
+
+def canonical_technology(term: str) -> str:
+    """The one canonical name for a technology, whoever is naming it.
+
+    Runs both alias maps, because a technology can be named from either half
+    of the vocabulary and the two maps canonicalise different halves —
+    "azure kubernetes service" through ALIASES, "google cloud" through the JD
+    aliases. Without both, "I used Google Cloud" and "I never used GCP" would
+    be talking about two different technologies, and the denial would not bite
+    on the claim.
+
+    Used by denial extraction AND by positive confirmation. If only one side
+    used it, the two sides would key the same technology differently and a
+    denial would silently fail to remove what a document established.
     """
     key = normalise(term)
     return _JD_ALIASES.get(key, key)
+
+
+def normalise_denial_term(term: str) -> str:
+    """Deprecated name for `canonical_technology`."""
+    return canonical_technology(term)
 
 
 def detect_role_family(jd_text: str) -> tuple[str, list[str]]:
