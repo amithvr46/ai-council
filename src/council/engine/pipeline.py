@@ -23,7 +23,7 @@ from council import outcomes
 from council.db.models import ClaimAssessmentRow, EvidenceItemRow, Request, Step
 from council.db.session import session_scope
 from council.engine.assessor_guards import blind_claims, sanitize
-from council.engine.budget import BudgetTracker
+from council.engine.budget import BudgetExceeded, BudgetTracker
 from council.engine.escalation import evaluate as evaluate_escalation
 from council.engine.prompts import PromptRegistry
 from council.engine.routing import MODES, RoutingDecision, decide
@@ -215,6 +215,16 @@ class CouncilEngine:
         )
         budget = BudgetTracker(mode)
         routed_by_auto = routing_decision is not None and routing_decision.was_routed
+        # Auto chose Deep BECAUSE the answer depends on fresh external-world
+        # information. That reason has to survive into execution: if it does
+        # not, candidate agreement silently cancels the evidence layer and the
+        # run returns a confident current-fact answer with evidence_used=false,
+        # which is the opposite of why Deep was selected. See R5 below.
+        evidence_required = bool(
+            mode == "deep"
+            and routing_decision is not None
+            and routing_decision.features.get("needs_fresh_information")
+        )
 
         # Forward affordability: refuse BEFORE starting work that cannot be
         # completed within the remaining spend budget. Enforced here at the
@@ -246,6 +256,7 @@ class CouncilEngine:
                 final = await self._run_council(
                     request_id, question, budget, seq, deep=(mode == "deep"),
                     history=history, routed_by_auto=routed_by_auto,
+                    evidence_required=evidence_required,
                 )
         except asyncio.CancelledError:
             self._cancel_started[request_id] = started
@@ -342,6 +353,7 @@ class CouncilEngine:
         deep: bool = False,
         history: list | None = None,
         routed_by_auto: bool = False,
+        evidence_required: bool = False,
     ) -> dict:
         prompt = self.registry.get("candidate")
         # Randomize which provider is Candidate A — blinding starts at birth,
@@ -416,10 +428,34 @@ class CouncilEngine:
             )
 
         evidence: EvidenceContext | None = None
-        if deep and check.checkable_claims:
-            evidence = await self._gather_and_assess_evidence(
-                request_id, question, candidates, check, budget, seq
-            )
+        # `check.checkable_claims` alone is not a sufficient trigger. When the
+        # two candidates agree, the combined check returns no claims, and a
+        # freshness-routed Deep run then skipped the evidence layer entirely
+        # and answered a current-fact question from model consensus — the exact
+        # thing the freshness rung exists to prevent. Agreement between two
+        # models trained on the same stale world is not evidence about now.
+        if deep and (check.checkable_claims or evidence_required):
+            try:
+                evidence = await self._gather_and_assess_evidence(
+                    request_id, question, candidates, check, budget, seq,
+                    freshness_only=evidence_required and not check.checkable_claims,
+                )
+            except BudgetExceeded as e:
+                if check.checkable_claims:
+                    raise  # pre-existing path: unchanged, still fails loudly
+                # Freshness alone opened this path, so a refusal here is a
+                # bounded degradation rather than a failure. R5 below then
+                # forces the answer to admit the current fact is unverified.
+                await self._record_stage(
+                    request_id,
+                    seq(),
+                    "evidence_not_gathered",
+                    {
+                        "checkable_claims": 0,
+                        "reason": f"evidence budget refused: {e}",
+                        "consequence": "current factual claim must be marked unverified",
+                    },
+                )
 
         # R4: on the agreement path, any evidence-contradicted claim disables
         # the synthesis shortcut and escalates to the judge, which can reject
@@ -465,6 +501,45 @@ class CouncilEngine:
                     "degraded": True,
                 }
                 producer = candidates["A"].provider
+
+            # R5: a run that went Deep BECAUSE the answer depends on current
+            # external facts may not present those facts as settled unless the
+            # evidence settled them. This is the agreement path, so there is no
+            # disagreement to trigger R1 — two models confidently agreeing
+            # about the present is precisely the failure mode, not a reason for
+            # confidence.
+            #
+            # Fires whether evidence was never gathered (tooling down, budget
+            # refused, planner returned nothing) or came back indecisive. In
+            # both cases the honest answer is the same.
+            if evidence_required and (evidence is None or not evidence.decisive):
+                await self._record_stage(
+                    request_id,
+                    seq(),
+                    "freshness_unverified",
+                    {
+                        "rule": "freshness-routed deep must not assert current facts "
+                        "the evidence did not establish",
+                        "evidence_gathered": evidence is not None,
+                        "evidence_decisive": bool(evidence and evidence.decisive),
+                        "forced": "revision",
+                    },
+                )
+                await self._set_evidence_override(request_id)
+                result["force_revision_reasons"] = [
+                    "This question was routed to deep processing because the answer "
+                    "depends on current external information, and that information was "
+                    + (
+                        "gathered but did not establish the current position."
+                        if evidence is not None
+                        else "not able to be retrieved."
+                    )
+                    + " The candidates agreed, but agreement between models is not "
+                    "evidence about the present. State plainly which part of the answer "
+                    "is time-sensitive and unverified, give the stable background that "
+                    "is still accurate, and say where the current position can be "
+                    "confirmed. Do not present the current status as established."
+                ]
         else:
             # Reasoning/design disputes earn one critique round in deep mode.
             # Factual disputes go to evidence, not debate.
@@ -598,12 +673,15 @@ class CouncilEngine:
     # ------------------------------------------------------------- evidence
 
     async def _gather_and_assess_evidence(
-        self, request_id, question, candidates, check, budget, seq
+        self, request_id, question, candidates, check, budget, seq, *, freshness_only=False
     ) -> "EvidenceContext | None":
         """Plan checks, run the tools, then judge the claims against what came
         back. Tool failures and gaps become INSUFFICIENT verdicts — never
         silent absence — so uncertainty survives to the final answer."""
-        plan = await self._plan_evidence(request_id, question, candidates, check, budget, seq)
+        plan = await self._plan_evidence(
+            request_id, question, candidates, check, budget, seq,
+            freshness_only=freshness_only,
+        )
         if plan is None or not plan.queries:
             # Checkable claims existed but nothing was planned. Record the gap
             # explicitly — silence here would look identical to "verified".
@@ -644,7 +722,7 @@ class CouncilEngine:
         return EvidenceContext(items=items, assessment=assessment)
 
     async def _plan_evidence(
-        self, request_id, question, candidates, check, budget, seq
+        self, request_id, question, candidates, check, budget, seq, *, freshness_only=False
     ) -> EvidencePlan | None:
         prompt = self.registry.get("evidence_plan")
         provider = self.providers[self.check_provider]
@@ -653,6 +731,19 @@ class CouncilEngine:
             f"- ({c.made_by}) {c.claim} — matters because: {c.why_material}"
             for c in check.checkable_claims
         )
+        if not claims:
+            # The candidates agreed, so the check produced no disputed claims.
+            # There is still something to verify: the current-state premise the
+            # agreed answer rests on. Say so explicitly rather than handing the
+            # planner an empty section, which reads as "nothing to check".
+            claims = (
+                "- (both) The candidates AGREE, so no claim is disputed. What "
+                "needs checking is the CURRENT external state the question asks "
+                "about — this run was routed to deep processing because the "
+                "answer depends on fresh information, and agreement between two "
+                "models is not evidence about the present. Plan searches that "
+                "establish the current position directly."
+            )
         # Deliberately NOT told which tools are up. A planner that knows the
         # web is down returns an empty plan, and the request then falls back
         # to model consensus with no record that verification was impossible
