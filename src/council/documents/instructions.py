@@ -90,23 +90,30 @@ _FRAMING = re.compile(
     re.I,
 )
 
-# Positive statements too soft to reverse a hard boundary.
+# The user is UNSURE whether the thing happened.
 #
-# "I think I used GCP once" is not the same act as "I used GCP professionally".
-# Both may become career prose, but only the second is explicit enough to
-# override a denial the user previously made. Hedged recollection is exactly
-# the case where the earlier, definite statement deserves to win.
-_HEDGE = re.compile(
+# "I think I might have used GCP once" is not an assertion of professional
+# experience. It is someone trying to remember. Treating it as a career fact
+# means a hazy recollection becomes a line on a submitted resume, which is the
+# same failure as fabrication with a politer origin.
+#
+# Only genuine epistemic uncertainty belongs here. Words about SCALE or
+# DURATION were removed deliberately: "I used Ansible briefly" and "I used it a
+# bit" are certain assertions of limited experience, and blocking them would
+# force the user to restate legitimate experience — the exact friction the
+# Career Experience Profile exists to remove.
+_UNCERTAIN = re.compile(
     r"\b(?:i\s+think|i\s+believe|i\s+guess|i\s+suppose|maybe|perhaps|possibly|"
     r"probably|might\s+have|may\s+have|could\s+have|not\s+sure|unsure|"
-    r"can'?t\s+remember|don'?t\s+remember|sort\s+of|kind\s+of|a\s+little|"
-    r"a\s+bit|briefly|once\s+or\s+twice|i\s+may|i\s+might)\b",
+    r"can'?t\s+remember|don'?t\s+remember|sort\s+of|kind\s+of|"
+    r"i\s+may|i\s+might|vaguely|at\s+some\s+point)\b",
     re.I,
 )
 
 # Statements about somebody else. "My team used GCP" is true, relevant and
-# not a claim that the USER used GCP — and it must certainly not reverse a
-# denial the user made about themselves.
+# not a claim that the USER used GCP. A resume is a first-person document, so
+# a team's experience becoming the user's is a fabricated career fact even
+# though nothing in the sentence is false.
 #
 # The third party has to be the SUBJECT of a verb, not merely mentioned.
 # "I used GCP professionally at my last company" is a first-person claim that
@@ -398,20 +405,12 @@ class Instruction:
         so the statement that does it has to be an unambiguous assertion by the
         user about their own career.
 
-        Two filters beyond being a career statement:
-
-          - FRAMING. "Make my resume sound like I used GCP" is a request about
-            wording, not a claim about a career. It is excluded by `parse`
-            before it can ever become a career statement, so it never reaches
-            here — the guard below is defence in depth for statements built by
-            other means.
-          - HEDGING. "I think I might have used GCP once" may well belong in
-            career prose, but it is not strong enough to overturn a definite
-            earlier "I have never used GCP". When a vague new statement meets a
-            definite old one, the definite one stands.
-          - THIRD PARTIES. "My team used GCP" is a statement about a team. It
-            is not the user saying they used GCP, so it cannot undo the user
-            saying they did not.
+        Framed, uncertain and third-party sentences are excluded by `parse`
+        before they can become career statements at all, so none of them reach
+        here. The guard below is therefore redundant on every current path, and
+        is kept deliberately: this is the function that can undo a hard truth
+        boundary, and it should not depend on an upstream filter staying
+        correct forever. If the two ever disagree, the stricter one wins.
 
         A term denied in this same request is excluded by the caller: an
         explicit denial is a hard boundary within the request that states it.
@@ -420,7 +419,7 @@ class Instruction:
         for sentence in self.career_statements:
             if (
                 _FRAMING.search(sentence)
-                or _HEDGE.search(sentence)
+                or _UNCERTAIN.search(sentence)
                 or _THIRD_PARTY.search(sentence)
             ):
                 continue
@@ -463,10 +462,27 @@ def _classify_clause(clause: str) -> str:
     denial as a career statement, stores it as positive prose and confirms
     Harness.
 
-    Framing is checked before BOTH. A framed sentence is talking about a claim,
-    not making one, and must not become career prose in either direction.
+    Framing, uncertainty and third-party attribution are checked before BOTH.
+    Each describes a sentence that is not the user asserting their own
+    professional experience:
+
+      - FRAMING     "Make my resume sound like I used GCP"  — a request about
+                    wording, and specifically a request to fabricate.
+      - UNCERTAIN   "I think I might have used GCP once"    — trying to
+                    remember, not asserting.
+      - THIRD PARTY "My team used GCP"                      — someone else's
+                    experience.
+
+    All three match `_FIRST_PERSON_CLAIM` perfectly well, because all three are
+    first-person sentences containing an experience verb. Without these guards
+    each becomes positive career prose, gets stored as a user_statement career
+    source, and the technology it names becomes CONFIRMED PROFESSIONAL
+    EXPERIENCE eligible for a submitted resume — no denial needed anywhere.
+
+    That is the same defect shape as the original negation bug: a sentence that
+    merely CONTAINS a technology name is read as evidence the user has used it.
     """
-    if _FRAMING.search(clause):
+    if _FRAMING.search(clause) or _UNCERTAIN.search(clause) or _THIRD_PARTY.search(clause):
         return "preference"
     if classify_negation(clause) is not None:
         return "denial"

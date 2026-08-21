@@ -214,12 +214,21 @@ def test_a_request_to_fabricate_is_not_even_a_career_source():
     assert parsed.preferences == ["Make my resume sound like I used GCP."]
 
 
-def test_a_hedged_claim_may_be_prose_but_may_not_reverse_a_boundary():
-    """Deliberately asymmetric. A hedge is weak evidence, not no evidence, so
-    it stays in career prose — but when weak new evidence meets a definite
-    earlier denial, the definite statement stands."""
+def test_an_uncertain_claim_is_not_career_prose_at_all():
+    """SUPERSEDED by the follow-up patch, and the reversal is the point.
+
+    This test used to assert that a hedged sentence stayed in career prose and
+    was merely blocked from superseding. That was the behaviour I flagged as
+    wrong in the hardening review: blocking supersession protects a technology
+    the user has already denied, and does nothing for one they have not. "I
+    think I might have used GCP once" still confirmed GCP where no denial
+    existed.
+
+    Uncertain recollection is now not career prose in either direction. See
+    tests/test_positive_confirmation.py for the full rule.
+    """
     parsed = parse("I think I might have used GCP once.")
-    assert parsed.career_statements != []
+    assert parsed.career_statements == []
     assert parsed.claimed_terms() == []
 
 
