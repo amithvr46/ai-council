@@ -91,19 +91,58 @@ class ResumeDraft(BaseModel):
 
 class ReviewFinding(BaseModel):
     lens: str  # ats | recruiter_scan | technical_credibility | interview_defensibility
-    #          | truthfulness | tone
+    #          | truthfulness | tone | section_coherence | seniority
     severity: str = "minor"  # blocking | major | minor
     location: str = ""
     problem: str
     fix: str = ""
 
 
+# The arc a recent employment or project section should convey BETWEEN its
+# bullets (Amendment B2). Not a template every bullet must follow — a checklist
+# for what the section as a whole leaves the reader knowing.
+STORY_ELEMENTS = (
+    "environment",
+    "responsibility",
+    "implementation",
+    "operations",
+    "troubleshooting",
+    "outcome",
+)
+
+
+class SectionAssessment(BaseModel):
+    """One employment or project section judged as a whole (Amendment B2).
+
+    Structured rather than prose, because this is precisely the requirement a
+    bullet-by-bullet review cannot meet: a set of individually acceptable
+    bullets can still leave a reader unable to picture the work.
+
+    Naming WHICH elements are missing is what makes the finding actionable, and
+    what keeps "improve this section" out of the correction pass — a vague
+    instruction there is an invitation to invent.
+    """
+
+    section: str = ""  # the employer or project this covers
+    tells_the_story: bool = True
+    missing: list[str] = Field(
+        default_factory=list,
+        description=f"Which of {', '.join(STORY_ELEMENTS)} the section leaves unclear",
+    )
+    comment: str = ""
+
+
 class ReviewReport(BaseModel):
-    """A11. One report, several lenses — not one score.
+    """A11 + Amendment B. One report, several lenses — not one score.
 
     A single number would let a strong ATS result mask a bullet that cannot be
     defended in an interview, which is the failure the contract cares most
     about.
+
+    Amendment B adds two readings the original four missed. `sections` judges
+    each recent section as a whole. `seniority_expression` asks whether the work
+    described reads at the engineer's actual level — the positive half of a rule
+    whose negative half, no inflated adjectives, the tone lens already enforced.
     """
 
     findings: list[ReviewFinding] = Field(default_factory=list)
@@ -111,7 +150,13 @@ class ReviewReport(BaseModel):
     recruiter_scan: str = ""
     technical_credibility: str = ""
     interview_defensibility: str = ""
+    # --- Amendment B ---
+    sections: list[SectionAssessment] = Field(default_factory=list)
+    seniority_expression: str = ""
     would_submit: bool = False
 
     def blocking(self) -> list[ReviewFinding]:
         return [f for f in self.findings if f.severity in ("blocking", "major")]
+
+    def incoherent_sections(self) -> list[SectionAssessment]:
+        return [s for s in self.sections if not s.tells_the_story]

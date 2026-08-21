@@ -534,9 +534,17 @@ class ResumeWorkflow:
     # -------------------------------------------------------------- stage 6
 
     async def correct(self, draft, findings, review, trace) -> ResumeDraft:
+        """At most one bounded pass, and only when something was actually found.
+
+        A revision budget existing is not a reason to spend it (Amendment B).
+        A draft that passed the mechanical checks and the review is returned
+        untouched, costing no model call.
+        """
         blocking = review.blocking() if review else []
         if not findings and not blocking:
+            trace.record("correction_skipped", reason="nothing found to fix")
             return draft
+        incoherent = review.incoherent_sections() if review else []
         user = (
             f"DRAFT:\n{draft.model_dump_json(indent=2)}\n\n"
             f"MECHANICAL VIOLATIONS (not negotiable):\n"
@@ -548,6 +556,22 @@ class ResumeWorkflow:
             + "\n".join(
                 f"- [{f.severity}/{f.lens}] {f.location}: {f.problem} -> {f.fix}"
                 for f in blocking
+            )
+            # Amendment B2. Named elements rather than "improve this section":
+            # a vague instruction here is what produces an invented environment
+            # or a manufactured outcome.
+            + (
+                "\n\nSECTIONS THAT DO NOT YET COMMUNICATE THE WORK:\n"
+                + "\n".join(
+                    f"- {s.section}: unclear — {', '.join(s.missing) or 'overall shape'}"
+                    f"\n    {s.comment}"
+                    for s in incoherent
+                )
+                + "\n  Fix these ONLY by re-expressing what is already claimed or by "
+                "drawing on confirmed career context this section did not use. If an "
+                "element is missing because nothing establishes it, leave it missing."
+                if incoherent
+                else ""
             )
         )
         corrected = await self._call(
@@ -629,12 +653,64 @@ class ResumeWorkflow:
         # rather than hoping the correction pass obeyed it.
         corrected = enforce_style(corrected)
         remaining = self.check(corrected, analysis, confirmed, sources, jd_text)
+
+        # Amendment B4, enforced in code rather than trusted to the prompt.
+        #
+        # Asking for a more coherent section is the one instruction in this
+        # workflow that pushes the corrector to ADD material, and the cheapest
+        # way to satisfy it is to invent the missing part. The prompt forbids
+        # that; this makes it ineffective. If the correction pass introduced
+        # truth violations the reviewed draft did not have, the reviewed draft
+        # was better and is kept.
+        #
+        # Deliberately compares only truth classes. A correction that trades a
+        # style advisory for a fixed fabrication is a good trade and must not
+        # be reverted by a raw count.
+        if corrected is not draft:
+            before = _truth_violations(findings)
+            after = _truth_violations(remaining)
+            if len(after) > len(before):
+                trace.record(
+                    "correction_reverted",
+                    reason="the correction pass introduced truth violations",
+                    before=sorted(before),
+                    after=sorted(after),
+                    introduced=sorted(after - before) or ["additional instances"],
+                )
+                corrected = enforce_style(draft)
+                remaining = self.check(corrected, analysis, confirmed, sources, jd_text)
+
         trace.record(
             "post_correction_check",
             findings=len(remaining),
             corrected=corrected is not draft,
         )
         return GeneratedResume(corrected, analysis, review, remaining, trace)
+
+
+# Mechanical finding classes that mean the resume asserts something the career
+# does not establish. Style and readability findings are deliberately excluded:
+# they are not truth, and counting them would revert good corrections.
+TRUTH_CLASSES = frozenset({
+    "GAP_TECHNOLOGY",
+    ClaimClass.FABRICATED_FACT.value,
+    ClaimClass.UNSUPPORTED_IMPLEMENTATION_CLAIM.value,
+    ClaimClass.UNSUPPORTED_EXPANSION.value,
+})
+
+
+def _truth_violations(findings: list[dict]) -> set[tuple[str, str]]:
+    """(class, location) for every truth-class finding, as a set.
+
+    A set rather than a count so the trace can name what appeared. The caller
+    compares sizes, which catches a second instance of a class that was already
+    present at a different location.
+    """
+    return {
+        (f["class"], f.get("location", ""))
+        for f in findings
+        if f.get("class") in TRUTH_CLASSES
+    }
 
 
 def enforce_style(draft: ResumeDraft) -> ResumeDraft:

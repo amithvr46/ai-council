@@ -278,3 +278,31 @@ execute a request the user already made*. Escalating council → deep is more
 careful execution of the same question — it is not new scope, not a new
 subsystem and not a product change. Auto has no authority to do anything the
 user did not ask for, and nothing in this plan gives it any.
+
+## 10. Known limitations (Phase 3 Core frozen, 2026-08-21)
+
+Accepted at freeze. Neither blocks the product; both are recorded so they are
+decisions rather than surprises.
+
+**Explicit Deep does not inherit the freshness evidence rule.** Commit 6850879
+makes a freshness-routed Auto→Deep run gather evidence even when the candidates
+agree, and mark the current fact unverified when it could not. A user who
+selects Deep manually produces an `explicit` routing decision carrying no
+features, so that path keeps the old behaviour: agreement still cancels the
+evidence layer.
+
+The invariant as specified is about what Auto decided, and Auto is the intended
+default path, so this is non-blocking. The counter-argument is that freshness is
+a property of the QUESTION rather than of who chose the mode. Widening it would
+add two model calls to every explicit Deep run on a time-sensitive topic, which
+is a cost decision, not a correctness one. Asserted in
+`tests/test_freshness_evidence.py::test_an_explicitly_chosen_deep_is_unchanged_by_this_fix`
+so it stays visible.
+
+**Combined-check disagreement typing is stochastic.** A trade-off dispute whose
+supporting statements are factual can be classified `factual`, producing an
+escalation that buys nothing — observed once in the 56-run evaluation on
+count-vs-for_each. `escalation.py` is deterministic and correct; the
+classification comes from the model. No deterministic fix exists that would not
+weaken genuine factual escalation, so none was built. Revisit only with evidence
+that the rate is material.

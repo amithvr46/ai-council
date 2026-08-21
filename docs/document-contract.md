@@ -683,5 +683,22 @@ lists, denial logic or prompt architecture. That complexity is ours.
 
 ## B8. Status
 
-Recorded 2026-08-21. Not implemented, not scheduled. Sequencing decision comes
-after the pending Auto evaluation review.
+Recorded 2026-08-21, implemented the same day once Phase 3 Core was frozen.
+
+Implemented WITHOUT a new stage. The existing workflow already had the required
+shape — generate, review on the opposite provider, at most one bounded
+correction, DOCX — and four of the six readings B1 names. What was added:
+
+- `sections` and `seniority_expression` on `ReviewReport`, so B2 and B3 are
+  evaluated rather than hoped for (`resume_review.v2`)
+- named missing story elements passed to the correction pass, so a coherence
+  finding arrives as "operations, outcome unclear" rather than "improve this"
+- `resume_correct.v2`, which states how to fix a coherence finding without
+  inventing, and that a genuinely unestablished element stays missing
+- a deterministic guard in `run()`: a correction that introduces truth
+  violations the reviewed draft did not have is discarded and the reviewed
+  draft kept. B4 enforced in code, not trusted to a prompt.
+
+No new model call. No new career-truth subsystem. Cost delta is output tokens
+on one existing call, plus the existing correction firing on quality findings
+it previously could not see.
