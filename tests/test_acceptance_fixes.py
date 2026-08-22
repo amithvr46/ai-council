@@ -323,3 +323,110 @@ def test_6_the_modifier_match_does_not_break_the_github_guard():
     assert mentions_with_modifier("GCP-native tooling", "gcp")
     assert not mentions_with_modifier("We use GitHub heavily.", "git")
     assert not mentions_with_modifier("cloud-agnostic design", "cloud")
+
+
+# ------------------------------------------------------------------ defect 3
+#
+# Found while diagnosing why the UI still showed "prometheus/grafana",
+# "linux-based" and "gcp-native" as unsupported gaps AFTER the compound fix.
+#
+# The compound fix filtered candidates on the way IN to discovery. But the
+# discovery cache is persisted and permanent, and a run made before the fix had
+# already paid a model call for each of those compounds and written them into
+# it as technologies. `discover()` replays every cached technology against each
+# new JD, so the fix cleaned the entrance while the exit kept handing the same
+# terms back. A fix that only applies to JDs never seen before is not a fix.
+
+
+def _stale_cache():
+    """A technology_cache exactly as a pre-fix run would have left it."""
+    from council.documents.discovery import DiscoveryCache
+
+    return DiscoveryCache(
+        {"prometheus/grafana": True, "linux-based": True, "gcp-native": True}
+    )
+
+
+_COMPOUND_JD = (
+    "GCP-native services on Linux-based hosts, with Prometheus/Grafana "
+    "for observability."
+)
+
+
+@pytest.mark.asyncio
+async def test_11_a_cached_compound_is_not_replayed_as_a_gap():
+    from council.documents.discovery import discover
+
+    confirmed = _confirmed("I have worked on GCP before.")
+    result = await discover(
+        _COMPOUND_JD, confirmed, cache=_stale_cache(), ask_model=None
+    )
+
+    for compound in ("prometheus/grafana", "linux-based", "gcp-native"):
+        assert compound not in result.gaps
+        assert compound not in result.supported
+
+
+@pytest.mark.asyncio
+async def test_11_the_components_of_a_suppressed_compound_are_still_reported():
+    """Suppressing the compound must not suppress what it names. Silence here
+    would trade a false gap for a hidden strength — the same class of defect."""
+    from council.documents.discovery import discover
+
+    confirmed = _confirmed("I have worked on GCP before.")
+    result = await discover(
+        _COMPOUND_JD, confirmed, cache=_stale_cache(), ask_model=None
+    )
+
+    for term in ("gcp", "linux", "prometheus", "grafana"):
+        assert term in result.supported
+
+
+@pytest.mark.asyncio
+async def test_11_a_cached_compound_with_an_unknown_component_still_replays():
+    """The predicate is "every component is already accounted for", not "the
+    term contains a slash". A compound naming something genuinely unknown is
+    still a real discovery and must keep its gap."""
+    from council.documents.discovery import DiscoveryCache, discover
+
+    confirmed = _confirmed("I have worked on GCP before.")
+    result = await discover(
+        "We use Prometheus/Zorblatt for observability.",
+        confirmed,
+        cache=DiscoveryCache({"prometheus/zorblatt": True}),
+        ask_model=None,
+    )
+    assert "prometheus/zorblatt" in result.gaps
+
+
+@pytest.mark.asyncio
+async def test_11_a_denied_component_still_denies_the_cached_compound():
+    """Suppression must never become a laundering path. A compound is dropped
+    only when its components are known AND therefore resolved individually —
+    and an individually denied component stays denied."""
+    from council.documents.discovery import discover
+    from council.documents.profile import Denied
+
+    confirmed = _confirmed(
+        "I have worked on GCP before.",
+        denials=[Denied(term="grafana", kind="never_used", statement="")],
+    )
+    result = await discover(
+        _COMPOUND_JD, confirmed, cache=_stale_cache(), ask_model=None
+    )
+    assert "grafana" not in result.supported
+    assert "prometheus/grafana" not in result.supported
+
+
+def test_11_the_entry_and_replay_gates_share_one_predicate():
+    """Two copies of this rule would drift, and the drift would be invisible
+    until another acceptance run paid to find it."""
+    import inspect
+
+    from council.documents import discovery
+
+    assert (
+        inspect.getsource(discovery.candidate_terms).count("covered_by_known_parts")
+        == 1
+    )
+    assert inspect.getsource(discovery.discover).count("covered_by_known_parts") == 1

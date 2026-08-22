@@ -131,6 +131,23 @@ def known_vocabulary(confirmed: ConfirmedExperience) -> set[str]:
     )
 
 
+def covered_by_known_parts(term: str, vocabulary: set[str]) -> bool:
+    """True when `term` is a compound whose every component is already known.
+
+    "Prometheus/Grafana" and "Linux-based" name nothing the vocabulary cannot
+    already account for, so they are not discoveries and they are not terms in
+    their own right — the mechanical scan resolves their components separately
+    and is the authority on whether each is supported.
+
+    This lives at the shared boundary for the same reason `decompose_term` does.
+    Filtering compounds only on the way IN to discovery fixes the next JD and
+    leaves every compound a previous run already paid for sitting in the
+    persisted cache, ready to be replayed forever. One predicate, both gates.
+    """
+    parts = decompose_term(term)
+    return parts != [normalise(term)] and all(p in vocabulary for p in parts)
+
+
 def candidate_terms(jd_text: str, known: set[str], cached: set[str]) -> list[str]:
     """Technical-looking terms the local vocabulary cannot account for.
 
@@ -160,8 +177,7 @@ def candidate_terms(jd_text: str, known: set[str], cached: set[str]) -> list[str
         # "Prometheus/Grafana" and "Linux-based" were each escalated to the
         # model as unknown terms and came back classified as technologies the
         # career does not have — paying for the wrong answer twice over.
-        parts = decompose_term(key)
-        if parts != [key] and all(p in known or p in cached for p in parts):
+        if covered_by_known_parts(key, known | cached):
             continue
         if len(key) < 2 or key.isdigit():
             continue
@@ -268,8 +284,18 @@ async def discover(
 
     # Terms a previous discovery already established as technologies are known
     # vocabulary now — check them for support without paying again.
+    #
+    # The cache is permanent and older than the current reading of a term. A
+    # run made before compounds were understood wrote "prometheus/grafana",
+    # "linux-based" and "gcp-native" into it as technologies, and this loop
+    # replays every cached technology against the JD regardless of whether
+    # today's code would ever have nominated it. So the exact terms the
+    # compound fix removed came straight back out of the database on the next
+    # run. Applying the same predicate here makes that fix retroactive without
+    # touching a single stored row.
+    vocabulary = known | cache.technologies()
     for term in cache.technologies():
-        if term in known:
+        if term in known or covered_by_known_parts(term, vocabulary):
             continue
         if mentions(jd_text, term):
             (supported if confirmed.is_confirmed(term) else gaps).append(term)
