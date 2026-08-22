@@ -172,6 +172,36 @@ def _merge_denials(stored: list | None, instruction: Instruction) -> list[Denied
     return sorted(merged.values(), key=lambda d: d.term)
 
 
+# How many sections count as "current and recent". Two, because that is what a
+# recruiter reads and what the user described: the current project and the
+# immediately previous one.
+RECENT_SECTIONS = 2
+
+
+def _section_writing(draft: ResumeDraft) -> list[dict]:
+    """Amendment B2/B3 at the scope they were written for.
+
+    Every other mechanical check in this module runs over one bullet. That is
+    the right scope for a claim and the wrong scope for a section, and B2 says
+    so explicitly: "a set of individually acceptable bullets can still produce
+    an incoherent section". This is where that stops being only the reviewer's
+    problem.
+
+    ADVISORY, and named so in the finding. It reports a property of the writing,
+    not a truth violation — nothing here may be satisfied by adding a claim.
+    """
+    findings: list[dict] = []
+    for label, bullets in draft.sections():
+        for rule_id, hits in style.check_section(bullets).items():
+            findings.append({
+                "location": label,
+                "text": "",
+                "class": "SECTION_WRITING_ADVISORY",
+                "reasons": [f"{rule_id}: {'; '.join(hits)}"],
+            })
+    return findings
+
+
 def _unexpressed_platforms(
     draft: ResumeDraft, analysis: JDAnalysis, confirmed: ConfirmedExperience
 ) -> list[dict]:
@@ -203,24 +233,40 @@ def _unexpressed_platforms(
         for terms in (draft.skills or {}).values()
         for term in terms
     }
-    bullet_text = " ".join(text for _, text in draft.bullets())
+    sections = draft.sections()
+    recent = sections[:RECENT_SECTIONS]
 
-    return [
-        {
-            "location": "experience sections",
-            "text": term,
-            "class": "UNEXPRESSED_PLATFORM_EXPERIENCE",
-            "reasons": [
-                f"{term} is established professional platform experience and this "
-                "role emphasises it, but it appears only in the skills list. "
-                "Express it as real work in the most relevant recent role — "
-                "platform-level engineering only, never a named service that is "
-                "not separately confirmed."
-            ],
-        }
-        for term in sorted(jd_relevant)
-        if term in in_skills and not mentions(bullet_text, term)
-    ]
+    findings: list[dict] = []
+    for term in sorted(jd_relevant):
+        if term not in in_skills:
+            continue
+        expressed_in = [
+            label for label, bullets in sections if mentions(" ".join(bullets), term)
+        ]
+        for label, _ in recent:
+            if label in expressed_in:
+                continue
+            findings.append({
+                "location": label,
+                "text": term,
+                "class": "UNEXPRESSED_PLATFORM_EXPERIENCE",
+                "reasons": [
+                    f"{term} is established professional platform experience and "
+                    "this role emphasises it, but this section does not describe "
+                    "it. "
+                    + (
+                        f"It is described under {', '.join(expressed_in)}; express "
+                        "it here through a DIFFERENT aspect of the platform that "
+                        "fits this section's own work, not a restatement. "
+                        if expressed_in
+                        else "It appears only in the skills list. "
+                    )
+                    + "Platform-level engineering only, never a named service that "
+                    "is not separately confirmed. If this section's confirmed work "
+                    "gives it no honest place, leave it out."
+                ],
+            })
+    return findings
 
 
 def _career_context(
@@ -271,6 +317,18 @@ def _career_context(
             "monitoring and troubleshooting — written at the level and in the "
             "style of the rest of this engineer's work. A Skills line alone "
             "under-represents it.\n"
+            # Coverage, not just presence. The first run to get this right put
+            # the whole of a newly stated platform into one older role and left
+            # the current one untouched, which is the shape a recruiter reads
+            # first. Naming current-then-recent as the order of inspection is
+            # what makes the placement a decision instead of a coin toss.
+            "  Consider the CURRENT role first, then the immediately previous "
+            "one. For each, decide whether an existing bullet can carry it and "
+            "whether a new one is warranted. Where it belongs in more than one, "
+            "the sections must show DIFFERENT aspects of the platform, each "
+            "consistent with that section's own surrounding work — never the "
+            "same bullet twice. Where a section's confirmed work gives it no "
+            "honest place, leave it out of that section.\n"
             "  It does NOT establish any specific product of that platform. "
             "Name only the platform itself unless a named service is separately "
             "confirmed above."
@@ -606,6 +664,7 @@ class ResumeWorkflow:
         # its sentences is the JD rewritten in first person.
         if jd_text:
             findings.extend(find_mirroring(draft.bullets(), jd_text))
+        findings.extend(_section_writing(draft))
         findings.extend(_unexpressed_platforms(draft, analysis, confirmed))
         return findings
 
@@ -623,12 +682,30 @@ class ResumeWorkflow:
             trace.record("correction_skipped", reason="nothing found to fix")
             return draft
         incoherent = review.incoherent_sections() if review else []
+
+        # Advisories are separated from violations rather than listed with
+        # them. "Not negotiable" is the correct pressure to put behind a
+        # fabricated metric and exactly the wrong pressure to put behind a
+        # writing-quality observation — under it, the cheapest way to satisfy
+        # "this section reads as an inventory" is to invent something to say.
+        def _render(items):
+            return "\n".join(
+                f"- [{f['class']}] {f['location']}: {f['text']}\n    {'; '.join(f['reasons'])}"
+                for f in items
+            )
+
+        violations = [f for f in findings if not f["class"].endswith("_ADVISORY")]
+        advisories = [f for f in findings if f["class"].endswith("_ADVISORY")]
         user = (
             f"DRAFT:\n{draft.model_dump_json(indent=2)}\n\n"
             f"MECHANICAL VIOLATIONS (not negotiable):\n"
-            + "\n".join(
-                f"- [{f['class']}] {f['location']}: {f['text']}\n    {'; '.join(f['reasons'])}"
-                for f in findings
+            + _render(violations)
+            + (
+                "\n\nWRITING ADVISORIES (improve where the confirmed context "
+                "allows; never satisfy one by adding a claim, and leave the "
+                "wording alone rather than inflate it):\n" + _render(advisories)
+                if advisories
+                else ""
             )
             + "\n\nREVIEW FINDINGS:\n"
             + "\n".join(

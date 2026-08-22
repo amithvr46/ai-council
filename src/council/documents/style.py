@@ -47,23 +47,128 @@ def _ai_tells(text: str) -> list[str]:
     return sorted({m.group(0).lower() for m in _AI_TELLS.finditer(text)})
 
 
-def _repetitive_openers(text: str) -> list[str]:
+# ---------------------------------------------------------------- sections
+#
+# Repetition and framing are properties of a SECTION, not of a bullet. A
+# function handed one bullet at a time cannot see that four of them open with
+# the same word, however carefully it is written — which is exactly what went
+# wrong: the repetition rule below lived in the per-bullet rule list, was fed
+# one bullet per call by the workflow, and could therefore never fire. It
+# passed its unit test because the test handed it a markdown block, a shape the
+# workflow never produces.
+#
+# So section rules are their own kind, taking the section's bullets as a list.
+# The type makes the scope mistake unrepresentable rather than merely unlikely.
+
+
+@dataclass(frozen=True)
+class SectionRule:
+    id: str
+    instruction: str  # rendered into prompts alongside the per-bullet rules
+    check: Callable[[list[str]], list[str]]
+
+
+MIN_SECTION_BULLETS = 4  # below this, repetition is coincidence
+
+
+def _first_word(bullet: str) -> str:
+    return bullet.strip().lstrip("-*• ").split(" ")[0].strip(",.:;").lower()
+
+
+def _repetitive_openers(bullets: list[str]) -> list[str]:
     """Every bullet starting with the same word reads as generated."""
-    openers = [
-        line.strip().lstrip("-*• ").split(" ")[0].lower()
-        for line in text.splitlines()
-        if line.strip().startswith(("-", "*", "•"))
-    ]
-    if len(openers) < 4:
+    if len(bullets) < MIN_SECTION_BULLETS:
         return []
     counts: dict[str, int] = {}
-    for opener in openers:
-        counts[opener] = counts.get(opener, 0) + 1
+    for bullet in bullets:
+        word = _first_word(bullet)
+        counts[word] = counts.get(word, 0) + 1
     return [
-        f"{word} opens {n} of {len(openers)} bullets"
-        for word, n in counts.items()
-        if n >= max(3, len(openers) // 2)
+        f"{word} opens {n} of {len(bullets)} bullets"
+        for word, n in sorted(counts.items())
+        if n >= max(3, len(bullets) // 2)
     ]
+
+
+# Frames that name a technology the engineer was NEAR without saying what they
+# did with it. Each is a perfectly honest verb — the praised bullet "Supported a
+# subset of internal services on GCP, provisioning compute and storage
+# resources, configuring IAM roles..." opens with one and is exactly right,
+# because it continues into the work. So this is deliberately a PROPORTION over
+# a section and never a judgement on any single bullet: one "Supported" is
+# accurate, a section that is mostly them is an inventory of things touched.
+_INVENTORY_FRAME = re.compile(
+    r"^\s*(?:"
+    r"support(?:s|ed|ing)?"
+    r"|work(?:s|ed|ing)?\s+(?:with|on|across)"
+    r"|us(?:e|es|ed|ing)"
+    r"|assist(?:s|ed|ing)?"
+    r"|help(?:s|ed|ing)?"
+    r"|participat\w+\s+in"
+    r"|involved\s+in"
+    r"|responsible\s+for"
+    r"|familiar\s+with"
+    r"|exposure\s+to"
+    r")\b",
+    re.I,
+)
+
+
+def _inventory_framing(bullets: list[str]) -> list[str]:
+    """A section that mostly reports proximity to technologies rather than work.
+
+    The failure this catches is invisible bullet by bullet: every statement is
+    credible and true, and the section still reads as a responsibility
+    inventory rather than as an engineer describing what they did.
+    """
+    if len(bullets) < MIN_SECTION_BULLETS:
+        return []
+    framed = [b for b in bullets if _INVENTORY_FRAME.match(b)]
+    if len(framed) < max(3, len(bullets) // 2):
+        return []
+    return [
+        f"{len(framed)} of {len(bullets)} bullets report proximity to a "
+        f"technology rather than work done with it"
+    ]
+
+
+SECTION_RULES: list[SectionRule] = [
+    SectionRule(
+        id="vary_sentence_structure",
+        instruction=(
+            "Vary bullet structure and length within a section. Bullets that "
+            "all open with the same verb and run the same length read as "
+            "generated."
+        ),
+        check=_repetitive_openers,
+    ),
+    SectionRule(
+        id="describe_the_work",
+        instruction=(
+            "A section is not an inventory of technologies the engineer was "
+            "near. 'Supported AKS workloads' names a thing; 'Supported AKS "
+            "workloads through deployment and configuration changes, "
+            "investigating pod and networking failures during releases' "
+            "describes work. Where the confirmed career context supports "
+            "saying what was actually done, say it — and where it does not, "
+            "leave the bullet short rather than inflating it."
+        ),
+        check=_inventory_framing,
+    ),
+]
+
+
+def check_section(
+    bullets: list[str], rules: list[SectionRule] | None = None
+) -> dict[str, list[str]]:
+    """Run every section-scoped check over one section's bullets."""
+    rules = rules or SECTION_RULES
+    findings: dict[str, list[str]] = {}
+    for rule in rules:
+        violations = rule.check(bullets)
+        if violations:
+            findings[rule.id] = violations
+    return findings
 
 
 DEFAULT_RULES: list[StyleRule] = [
@@ -89,14 +194,6 @@ DEFAULT_RULES: list[StyleRule] = [
         check=_ai_tells,
     ),
     StyleRule(
-        id="vary_sentence_structure",
-        instruction=(
-            "Vary bullet structure and length. Bullets that all open with the "
-            "same verb and run the same length read as generated."
-        ),
-        check=_repetitive_openers,
-    ),
-    StyleRule(
         id="no_invented_metrics",
         instruction=(
             "Never invent percentages, counts, dollar figures, team sizes, "
@@ -116,10 +213,21 @@ DEFAULT_RULES: list[StyleRule] = [
 ]
 
 
-def prompt_guidance(rules: list[StyleRule] | None = None) -> str:
-    """Render the profile into prompt text."""
+def prompt_guidance(
+    rules: list[StyleRule] | None = None,
+    section_rules: list[SectionRule] | None = None,
+) -> str:
+    """Render the profile into prompt text — both scopes, one list.
+
+    A writer reading this needs the section rules as much as the bullet rules;
+    the split exists so the CHECKS cannot be run at the wrong scope, not to
+    hide half the preferences from the model.
+    """
     rules = rules or DEFAULT_RULES
-    return "\n".join(f"- {rule.instruction}" for rule in rules)
+    section_rules = SECTION_RULES if section_rules is None else section_rules
+    return "\n".join(
+        f"- {rule.instruction}" for rule in [*rules, *section_rules]
+    )
 
 
 def check(text: str, rules: list[StyleRule] | None = None) -> dict[str, list[str]]:

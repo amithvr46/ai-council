@@ -31,6 +31,29 @@ pass available.
   posting words it. Keep the substance; drop the borrowed phrasing.
 - **Style violations** — fix the specific text. A comma immediately before
   "and" is never acceptable outside a verbatim quote.
+- **SECTION_WRITING_ADVISORY** — a whole section repeats one opening verb, or
+  mostly reports being *near* technologies rather than describing work.
+  Advisory: it reports a property of the writing, and it is the one class you
+  may decline. **Do not fix it by swapping verbs.** Changing "Supported" to
+  "Engineered" without changing the substance is cosmetic, and on a resume it
+  is a small lie. "Supported" is often the accurate word — the praised version
+  of such a bullet keeps it and continues into the work: "Supported a subset of
+  internal services on GCP, provisioning compute and storage resources,
+  configuring IAM roles and service accounts and setting up monitoring". Fix it
+  the way a section-coherence finding is fixed, below: say what was actually
+  done with the technology where the confirmed context establishes it, merge
+  two thin bullets into one real one, or resequence. Where the context
+  establishes nothing more than proximity, leave the bullet short and say
+  nothing further. A shorter honest section beats a padded one.
+- **UNEXPRESSED_PLATFORM_EXPERIENCE** — the user established this platform
+  directly and this section does not describe it. Add or strengthen a bullet
+  only where this section's surrounding confirmed work gives it an honest
+  place, at platform level — infrastructure, identity and access, networking,
+  infrastructure as code, delivery, operations, monitoring, troubleshooting.
+  Never a named service of that platform unless it is separately confirmed. If
+  another section already describes the platform, this one must show a
+  different aspect of it, not a reworded copy. If there is no honest place for
+  it here, leave it out.
 - **Review findings** — apply the concrete fix given, in the voice of the rest
   of the resume.
 

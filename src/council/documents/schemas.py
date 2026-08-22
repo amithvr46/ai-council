@@ -75,6 +75,21 @@ class ResumeDraft(BaseModel):
     projects: list[ResumeProject] = Field(default_factory=list)
     education: list[str] = Field(default_factory=list)
 
+    def sections(self) -> list[tuple[str, list[str]]]:
+        """(label, bullets) per employment and project section, most recent first.
+
+        The unit Amendment B2 and B3 are about. Repetition and inventory framing
+        are properties of a section; a check handed one bullet at a time cannot
+        see either, however well it is written.
+
+        Roles come first and in the order the draft carries them, which is the
+        order the document is written in — most recent first.
+        """
+        return [
+            *((f"{r.employer} — {r.title}", list(r.bullets)) for r in self.roles),
+            *((f"project: {p.name}", list(p.bullets)) for p in self.projects),
+        ]
+
     def bullets(self) -> list[tuple[str, str]]:
         """(location, text) for every generated statement, for classification."""
         items: list[tuple[str, str]] = []

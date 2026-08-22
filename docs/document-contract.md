@@ -701,3 +701,35 @@ correction, DOCX — and four of the six readings B1 names. What was added:
 No new model call. No new career-truth subsystem. Cost delta is output tokens
 on one existing call, plus the existing correction firing on quality findings
 it previously could not see.
+
+### B8.1 Correction, 2026-08-22 — B2 was specified, not enforced
+
+Recorded because the gap between the two is the whole lesson.
+
+B6 named the requirement "most likely to be lost in implementation": recent
+sections must be evaluated as coherent sections, not only bullet by bullet.
+It was lost in implementation. The review prompt asked for it, `sections` and
+`SectionAssessment` carried it, and the reviewer was set a deliberately high
+bar — `tells_the_story` false only when a reader "genuinely could not describe
+the work". The deterministic layer that would have backed the reviewer up
+could not: every mechanical check in `workflow.check()` runs over ONE bullet,
+and the repetition rule sat in the per-bullet rule list, was handed one bullet
+per call, and had never once fired on a real draft. Its unit test passed
+because the test joined the bullets into a markdown block, a shape the
+workflow never produces.
+
+A truthful, ATS-clean resume whose every bullet opened with "Support" therefore
+passed every gate. Nothing was untrue and the section still failed B2.
+
+Now enforced: `style.SectionRule` is a distinct kind whose checks take a
+section's bullets as a list, so the scope mistake is unrepresentable rather
+than merely unlikely; `ResumeDraft.sections()` is that unit; `_section_writing`
+runs the section rules in the mechanical pass. Findings are ADVISORY and
+rendered apart from "not negotiable" violations — B4 cuts both ways, and "not
+negotiable" behind a writing observation is pressure to invent.
+
+Also corrected: `_unexpressed_platforms` asked whether a user-established
+platform appeared ANYWHERE in the draft, so one older section containing it
+satisfied the gate and the current role was never reconsidered. It now
+evaluates the current and immediately previous sections, and asks for a
+different aspect of the platform rather than a restatement.

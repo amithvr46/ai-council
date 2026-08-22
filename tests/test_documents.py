@@ -24,7 +24,12 @@ from council.documents.profile import (
     normalise,
     scan_jd_technologies,
 )
-from council.documents.style import blocking_violations, check, prompt_guidance
+from council.documents.style import (
+    blocking_violations,
+    check,
+    check_section,
+    prompt_guidance,
+)
 
 # --- §3 negative evidence: the rule that must never regress -----------------
 
@@ -296,27 +301,32 @@ def test_ai_tells_are_detected_but_not_blocking():
 
 
 def test_repetitive_bullet_openers_are_flagged():
-    text = "\n".join(
+    """Bullets as a LIST, which is the only shape the workflow ever has.
+
+    This test previously joined them into a markdown block and passed for
+    years while the rule could never fire on a real draft — the workflow calls
+    the style checks one bullet at a time, and one bullet has no repetition to
+    find. The list is the point of the test, not an implementation detail.
+    """
+    assert "vary_sentence_structure" in check_section(
         [
-            "- Managed Azure infrastructure",
-            "- Managed Kubernetes clusters",
-            "- Managed CI/CD pipelines",
-            "- Managed monitoring dashboards",
+            "Managed Azure infrastructure",
+            "Managed Kubernetes clusters",
+            "Managed CI/CD pipelines",
+            "Managed monitoring dashboards",
         ]
     )
-    assert "vary_sentence_structure" in check(text)
 
 
 def test_varied_bullets_pass():
-    text = "\n".join(
+    assert "vary_sentence_structure" not in check_section(
         [
-            "- Managed Azure infrastructure across three subscriptions",
-            "- Investigated recurring deployment failures in AKS",
-            "- Wrote Terraform for networking and identity resources",
-            "- Tuned Prometheus alerts to cut noisy paging",
+            "Managed Azure infrastructure across three subscriptions",
+            "Investigated recurring deployment failures in AKS",
+            "Wrote Terraform for networking and identity resources",
+            "Tuned Prometheus alerts to cut noisy paging",
         ]
     )
-    assert "vary_sentence_structure" not in check(text)
 
 
 def test_style_profile_is_renderable_and_extensible():
