@@ -537,11 +537,10 @@ and technically defensible representation of this career for this opportunity.
 
 ---
 
-# Amendment B — resume quality (frozen 2026-08-21, NOT YET IMPLEMENTED)
+# Amendment B — resume quality (frozen 2026-08-21, V1 IMPLEMENTED)
 
-A core requirement for the `resume_tailor` outcome. **Recorded only.** Nothing
-here is built, and its design and phase are decided after the pending Auto
-review — not before.
+A core requirement for the `resume_tailor` outcome. V1 is implemented — see
+B8 for exactly what was built and what was deliberately left out.
 
 It exists because the correctness work of August 2026 (denial boundary,
 positive confirmation, technology vocabulary) established what the system may
