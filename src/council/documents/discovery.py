@@ -32,6 +32,7 @@ from council.documents.profile import (
     DEFAULT_TECHNOLOGIES,
     FOREIGN_TECHNOLOGIES,
     ConfirmedExperience,
+    decompose_term,
     mentions,
     normalise,
     scan_jd_technologies,
@@ -154,6 +155,13 @@ def candidate_terms(jd_text: str, known: set[str], cached: set[str]) -> list[str
     for term in hits:
         key = normalise(term)
         if key in known or key in cached or key in _STOPWORDS or key in seen_keys:
+            continue
+        # A compound made entirely of names we already know is not a discovery.
+        # "Prometheus/Grafana" and "Linux-based" were each escalated to the
+        # model as unknown terms and came back classified as technologies the
+        # career does not have — paying for the wrong answer twice over.
+        parts = decompose_term(key)
+        if parts != [key] and all(p in known or p in cached for p in parts):
             continue
         if len(key) < 2 or key.isdigit():
             continue

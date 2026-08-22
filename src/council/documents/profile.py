@@ -111,6 +111,22 @@ DEFAULT_TECHNOLOGIES = [
     "powershell", "bash", "python", "linux", "jira",
 ]
 
+# Technology FAMILIES where a broad first-person statement establishes
+# platform-level engineering experience.
+#
+# "I have worked on GCP" is a claim about a platform, and platform experience
+# is real experience: infrastructure, identity, networking, IaC, delivery,
+# operations, monitoring. Confining it to a Skills line wastes something the
+# user actually told us.
+#
+# It is emphatically NOT a claim about every product in that platform. GKE,
+# Cloud Run, Cloud SQL, BigQuery and the rest stay unconfirmed until named,
+# which is why they live in FOREIGN_TECHNOLOGIES as ordinary terms rather than
+# being implied by membership here.
+PLATFORM_TECHNOLOGIES = frozenset(
+    {"azure", "aws", "gcp", "kubernetes", "openshift", "linux", "vmware"}
+)
+
 # Common ways the same thing is written. Extending this list is routine.
 #
 # Two kinds of entry live here and both matter:
@@ -173,6 +189,76 @@ ALIASES: dict[str, str] = {
 def normalise(term: str) -> str:
     term = re.sub(r"\s+", " ", term.strip().lower())
     return ALIASES.get(term, term)
+
+
+# --------------------------------------------------------------- compounds
+#
+# A JD writes one requirement as one token in ways the vocabulary never lists:
+#
+#     "Prometheus/Grafana"   two technologies joined by a slash
+#     "Linux-based"          one technology plus a descriptive suffix
+#     "GCP-native"           same
+#
+# Matched whole, none of them is known, so each was reported as an unsupported
+# gap — and the resume was then told not to claim Prometheus, Grafana or Linux,
+# all three of which the career genuinely establishes. Found by the real
+# acceptance run. Nothing was fabricated; the resume was simply made weaker
+# than the truth allows, which is the same class of failure as reporting a
+# confirmed strength unsupported.
+
+# Descriptive modifiers. "Linux-based" is not a technology distinct from Linux;
+# it is Linux with an adjective. Stripping the adjective is not a claim.
+_MODIFIER_SUFFIX = re.compile(
+    r"[-\s](?:based|native|centric|oriented|driven|focused|specific|related|"
+    r"style|like|first|ready|managed|compatible|flavou?red)$",
+    re.I,
+)
+
+# Joins that mean "these technologies, together". Deliberately NOT treated as
+# alternatives — see `decompose_term`.
+_COMPOUND_SPLIT = re.compile(r"\s*[/&+]\s*|\s+and\s+", re.I)
+
+
+_MODIFIER_WORDS = (
+    r"based|native|centric|oriented|driven|focused|specific|related|style|like|"
+    r"first|ready|managed|compatible|flavou?red"
+)
+
+
+def mentions_with_modifier(text: str, term: str) -> bool:
+    """`term` appearing under a descriptive suffix — "GCP" inside "GCP-native".
+
+    The plain word-boundary match deliberately refuses this, because that same
+    boundary is what stops "git" matching "github". Only the closed modifier
+    list is allowed through, so the guard stays intact: "hub" is not a
+    modifier, and "github" still never reads as "git".
+    """
+    pattern = rf"(?<![\w-]){re.escape(term)}-(?:{_MODIFIER_WORDS})\b"
+    return re.search(pattern, text, re.I) is not None
+
+
+def decompose_term(term: str) -> list[str]:
+    """Break a compound JD term into the technologies it actually names.
+
+    Returns [term] when there is nothing to decompose, so callers can treat
+    every term the same way.
+
+    The rule for a slash compound is deliberately conjunctive: "Prometheus/
+    Grafana" is satisfied only when BOTH are established. Reading it as an
+    alternative would let one confirmed half vouch for an unconfirmed other —
+    a JD asking for two things would become evidence for the one the career
+    does not have, which is exactly the boundary this module exists to hold.
+    """
+    key = normalise(term)
+    stripped = _MODIFIER_SUFFIX.sub("", key).strip()
+    if stripped and stripped != key:
+        # Recurse: "GCP-native/AWS-native" is not absurd in a JD.
+        return decompose_term(stripped)
+
+    parts = [normalise(p) for p in _COMPOUND_SPLIT.split(key) if p.strip()]
+    if len(parts) > 1:
+        return [q for part in parts for q in decompose_term(part)]
+    return [key]
 
 
 @dataclass
@@ -250,10 +336,48 @@ class ConfirmedExperience:
     denied: dict[str, Denied] = field(default_factory=dict)
 
     def is_confirmed(self, term: str) -> bool:
+        """Whether the career establishes this term, compounds included.
+
+        Decomposition happens HERE rather than in each caller, so the JD
+        scanner, the claim classifier, the prompt truth set and every future
+        consumer inherit the same reading of "Prometheus/Grafana" — and, more
+        importantly, the same denial behaviour. A compound is confirmed only
+        when EVERY component is; one denied component denies the whole, which
+        is what stops a compound becoming a side door around a hard boundary.
+        """
         key = normalise(term)
         if key in self.denied:
             return False  # redundant by construction, and deliberately kept
-        return key in self.terms
+        if key in self.terms:
+            return True
+
+        components = decompose_term(key)
+        if components == [key]:
+            return False
+        return all(
+            c not in self.denied and c in self.terms for c in components
+        )
+
+    def stated_by_user(self) -> set[str]:
+        """Terms established by the user's own statement and nothing else.
+
+        These are structurally different from document-derived terms: no career
+        source describes the work, so unless the writer composes something they
+        appear nowhere as experience. Naming them is what lets the drafter tell
+        "already described in the master resume" from "true, and described
+        nowhere yet".
+        """
+        return {
+            term
+            for term, origins in self.sources.items()
+            if term in self.terms
+            and origins
+            and all(o.startswith(f"{AUTHORITY_USER_STATEMENT}:") for o in origins)
+        }
+
+    def stated_platforms(self) -> set[str]:
+        """User-stated terms that are platform families (see above)."""
+        return {t for t in self.stated_by_user() if t in PLATFORM_TECHNOLOGIES}
 
     def unconfirmed(self, terms: list[str]) -> list[str]:
         return [t for t in terms if not self.is_confirmed(t)]
@@ -470,7 +594,9 @@ def scan_jd_technologies(
     supported: list[str] = []
     unsupported: list[str] = []
     for term in sorted(known, key=len, reverse=True):
-        if not _mentions(jd_text, term):
+        # A descriptive suffix must not hide established experience: a JD
+        # asking for "GCP-native services" is asking for GCP.
+        if not (_mentions(jd_text, term) or mentions_with_modifier(jd_text, term)):
             continue
         canonical = _JD_ALIASES.get(term, normalise(term))
         bucket = supported if confirmed.is_confirmed(canonical) else unsupported

@@ -172,6 +172,57 @@ def _merge_denials(stored: list | None, instruction: Instruction) -> list[Denied
     return sorted(merged.values(), key=lambda d: d.term)
 
 
+def _unexpressed_platforms(
+    draft: ResumeDraft, analysis: JDAnalysis, confirmed: ConfirmedExperience
+) -> list[dict]:
+    """Platform experience the user established that reached Skills only.
+
+    The review is bullet-level and section-level: every lens asks whether what
+    is PRESENT is good. None asks whether something true, relevant and
+    established is ABSENT — so a resume can list GCP under Skills, describe no
+    GCP work anywhere, and pass every check. That is exactly what the
+    acceptance run produced.
+
+    Deterministic on purpose, and narrow on purpose. It fires only for a
+    platform the USER established (no career source describes it, so nothing
+    will write it unprompted), that the JD actually emphasises (otherwise
+    silence is correct tailoring, not a defect), and that the draft mentions in
+    its skills list but in no bullet. It never asks for a specific claim — the
+    correction pass writes it from the same truth set as everything else.
+    """
+    stated = confirmed.stated_platforms()
+    if not stated:
+        return []
+
+    jd_relevant = {t for t in stated if t in {normalise(x) for x in analysis.discovery.supported}}
+    if not jd_relevant:
+        return []
+
+    in_skills = {
+        normalise(term)
+        for terms in (draft.skills or {}).values()
+        for term in terms
+    }
+    bullet_text = " ".join(text for _, text in draft.bullets())
+
+    return [
+        {
+            "location": "experience sections",
+            "text": term,
+            "class": "UNEXPRESSED_PLATFORM_EXPERIENCE",
+            "reasons": [
+                f"{term} is established professional platform experience and this "
+                "role emphasises it, but it appears only in the skills list. "
+                "Express it as real work in the most relevant recent role — "
+                "platform-level engineering only, never a named service that is "
+                "not separately confirmed."
+            ],
+        }
+        for term in sorted(jd_relevant)
+        if term in in_skills and not mentions(bullet_text, term)
+    ]
+
+
 def _career_context(
     profile: CareerProfile,
     confirmed: ConfirmedExperience,
@@ -198,6 +249,32 @@ def _career_context(
         lines.append(f"established achievements: {'; '.join(profile.achievements)}")
     if profile.notes:
         lines.append(f"notes: {profile.notes}")
+    # Platform experience the USER established and no document describes.
+    #
+    # Everything above arrives as one undifferentiated truth set, so a
+    # technology the user just told us about is indistinguishable from the
+    # seventy the master resume already narrates in bullets. The writer does
+    # the safe thing with a term it has no story for: lists it under Skills.
+    # That is what happened on the real acceptance run, and it wastes the one
+    # thing the user actually said.
+    #
+    # Naming them, and saying what may be written, is the whole fix.
+    stated_platforms = sorted(confirmed.stated_platforms())
+    if stated_platforms:
+        lines.append(
+            "ESTABLISHED BY THE USER'S OWN STATEMENT, described in no career "
+            f"source yet: {', '.join(stated_platforms)}.\n"
+            "  These are PLATFORM-LEVEL experience and are as true as anything "
+            "above. Where the job description makes one relevant, express it as "
+            "real work in an experience section — infrastructure, identity and "
+            "access, networking, infrastructure as code, delivery, operations, "
+            "monitoring and troubleshooting — written at the level and in the "
+            "style of the rest of this engineer's work. A Skills line alone "
+            "under-represents it.\n"
+            "  It does NOT establish any specific product of that platform. "
+            "Name only the platform itself unless a named service is separately "
+            "confirmed above."
+        )
     if confirmed.denied:
         # Denied technologies are already absent from the truth set above, so
         # this line is not what enforces the boundary — the assembled set is.
@@ -529,6 +606,7 @@ class ResumeWorkflow:
         # its sentences is the JD rewritten in first person.
         if jd_text:
             findings.extend(find_mirroring(draft.bullets(), jd_text))
+        findings.extend(_unexpressed_platforms(draft, analysis, confirmed))
         return findings
 
     # -------------------------------------------------------------- stage 6
